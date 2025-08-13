@@ -1,5 +1,3 @@
-
-https://github.com/user-attachments/assets/c1273249-9355-4c02-a8fe-5f79479e9b13
 [English](#english) | [中文](#中文)
 
 <a name="english"></a>
@@ -9,11 +7,12 @@ https://github.com/user-attachments/assets/c1273249-9355-4c02-a8fe-5f79479e9b13
 A powerful and flexible utility for Windows that allows you to minimize any application window to the system tray instead of the taskbar. It offers robust support for both classic Win32 applications and modern UWP (Microsoft Store) apps.
 
 <!-- Placeholder for a GIF/video demonstrating the core functionality -->
-> **Demonstration Video/GIF**
+> **Demonstration**
 >
 > 
+![example](https://github.com/user-attachments/assets/e5a8786c-9a26-42ea-9ae4-1ebc15001785)
 
-https://github.com/user-attachments/assets/7fb211da-9d0b-42a3-96b5-596f54cdac35
+
 
 
 
@@ -99,11 +98,11 @@ While highly recommended for the best experience, you can disable this feature i
 一个功能强大且灵活的 Windows 小工具，可以将任何应用程序窗口最小化到系统托盘区，而不是任务栏。它为经典的 Win32 应用和现代的 UWP (应用商店) 应用提供了稳定可靠的支持。
 
 <!-- 演示视频/GIF占位符 -->
-> **功能演示 视频/GIF**
+> **功能演示**
 >
 > 
+![Uploading example.gif…]()
 
-https://github.com/user-attachments/assets/457f8f32-bfe0-446e-bd36-b85f40b77276
 
 
 
