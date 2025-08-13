@@ -9,8 +9,9 @@ A powerful and flexible utility for Windows that allows you to minimize any appl
 <!-- Placeholder for a GIF/video demonstrating the core functionality -->
 > **Demonstration**
 >
-> 
-![example](https://github.com/user-attachments/assets/e5a8786c-9a26-42ea-9ae4-1ebc15001785)
+> ![example](https://github.com/user-attachments/assets/46b2bf3c-d154-4304-9981-db9976ab13a4)
+
+
 
 
 
@@ -100,8 +101,8 @@ While highly recommended for the best experience, you can disable this feature i
 <!-- 演示视频/GIF占位符 -->
 > **功能演示**
 >
-> 
-![Uploading example.gif…]()
+> ![example](https://github.com/user-attachments/assets/9b817763-a16c-453e-adda-9f438ad7e336)
+
 
 
 
