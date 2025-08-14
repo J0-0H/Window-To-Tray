@@ -19,6 +19,7 @@ struct TrayIcon {
     HICON          originalIcon{ nullptr };
     bool           wasMaximized{ false };
     bool           ownsIcon{ false };
+    bool           isUwp{ false };     // 新增：是否为 UWP 窗口
     int            originalDesktop{ 0 };
 };
 

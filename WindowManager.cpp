@@ -261,11 +261,10 @@ bool WindowManager::ShowWindowInTaskbar(HWND hwnd, int originalDesktop)
     {
         (void)ShowWindowVirtual(hwnd, originalDesktop);
 
-        // Regardless of success, un-track the window and try to clean up the hidden desktop
+        // 仅取消追踪，不在此处尝试删除隐藏桌面（避免提前把所有 UWP 窗口一起弹出）
         if (virtualDesktopManager)
         {
             virtualDesktopManager->MarkUwpWindowRestored(hwnd);
-            virtualDesktopManager->TryRemoveHiddenDesktopIfEmpty();
         }
     }
 

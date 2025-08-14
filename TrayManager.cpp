@@ -276,6 +276,7 @@ bool TrayManager::AddWindowToTray(HWND hwnd, int originalDesktop)
     ti.originalIcon = GetWindowIcon(hwnd, ti.ownsIcon);
     ti.wasMaximized = ::IsZoomed(hwnd) ? true : false;
     ti.originalDesktop = originalDesktop;
+    ti.isUwp = WindowManager::IsUWPApplication(hwnd); // 记录是否为 UWP
 
     ti.nid.cbSize = sizeof(NOTIFYICONDATA);
     ti.nid.hWnd = mainWindow;
@@ -309,7 +310,19 @@ bool TrayManager::RestoreWindowFromTray(UINT iconId)
     ::Shell_NotifyIconW(NIM_DELETE, &it->second.nid);
     if (it->second.ownsIcon && it->second.originalIcon)
         ::DestroyIcon(it->second.originalIcon);
+
+    // 先从集合中移除当前图标
     trayIcons.erase(it);
+
+    // 若托盘中已无任何 UWP 窗口，才尝试删除隐藏桌面
+    bool anyUwpLeft = false;
+    for (const auto& kv : trayIcons) {
+        if (kv.second.isUwp) { anyUwpLeft = true; break; }
+    }
+    if (!anyUwpLeft) {
+        WindowManager::TryRemoveHiddenDesktopIfUnused();
+    }
+
     return true;
 }
 
