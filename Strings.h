@@ -24,6 +24,9 @@ namespace I18N {
     // "untitled_window"
     // "settings_title", "settings_use_virtual_desktop", "settings_language"
     // "settings_hotkey_min_top", "settings_hotkey_hide_all", "settings_btn_save", "settings_btn_cancel", "settings_hotkey_tip"
+    // "settings_use_collection_mode", "settings_hotkey_show_collection", "collection_window_title"
+    // --- NEW ---
+    // "collection_disable_mode_button"
 
 } // namespace I18N
 

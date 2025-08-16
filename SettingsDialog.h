@@ -56,6 +56,9 @@ private:
     HWND hHkHideAll_;
     HWND hBtnSave_;
     HWND hBtnCancel_;
+    // --- NEW ---
+    HWND hChkUseCollection_;
+    HWND hHkShowCollection_;
 
     bool saved_ = false;
     Settings result_;

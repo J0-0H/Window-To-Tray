@@ -16,6 +16,9 @@ struct Settings {
     I18N::Language      language = I18N::Language::Chinese;
     Hotkey              hkMinTop{ MOD_CONTROL | MOD_ALT, 'M' }; // Ctrl+Alt+M
     Hotkey              hkHideAll{ MOD_CONTROL | MOD_ALT, 'X' }; // Ctrl+Alt+X
+    // --- NEW ---
+    bool                useCollectionMode = false;
+    Hotkey              hkShowCollection{ MOD_CONTROL | MOD_ALT, 'C' }; // Ctrl+Alt+C
 };
 
 class SettingsManager {

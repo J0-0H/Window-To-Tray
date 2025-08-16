@@ -1,4 +1,4 @@
-#include "SettingsDialog.h"
+ï»¿#include "SettingsDialog.h"
 #include <windowsx.h>
 #include <cassert>
 
@@ -15,7 +15,10 @@ SettingsDialog::SettingsDialog(HWND parent, const Settings& current)
     , hHkMinTop_(nullptr)
     , hHkHideAll_(nullptr)
     , hBtnSave_(nullptr)
-    , hBtnCancel_(nullptr) {
+    , hBtnCancel_(nullptr)
+    , hChkUseCollection_(nullptr) // --- NEW ---
+    , hHkShowCollection_(nullptr) // --- NEW ---
+{
 }
 
 SettingsDialog::~SettingsDialog() {}
@@ -67,9 +70,9 @@ bool SettingsDialog::Create()
     }
     auto Scale = [&](int v) { return MulDiv(v, (int)dpi_, 96); };
 
-    // Base size at 96 DPI
+    // Base size at 96 DPI, increased height for new options
     int baseW = 560;
-    int baseH = 340;
+    int baseH = 420; // Increased height
     int winW = Scale(baseW);
     int winH = Scale(baseH);
 
@@ -85,7 +88,7 @@ bool SettingsDialog::Create()
     if (winW > workW - margin) winW = workW - margin;
     if (winH > workH - margin) winH = workH - margin;
     winW = max(winW, Scale(420));
-    winH = max(winH, Scale(300));
+    winH = max(winH, Scale(360)); // Increased min height
 
     DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUPWINDOW;
 
@@ -155,56 +158,83 @@ void SettingsDialog::BuildUi()
     const int tipH = SX(40);
     const int btnW = SX(100);
     const int btnH = SX(30);
+    int y = SX(26);
 
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
     // Language
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        margin, SX(26), SX(120), SX(20),
+        margin, y, SX(120), SX(20),
         hWnd_, (HMENU)IDC_LABEL_LANG, nullptr, nullptr);
 
     int comboX = SX(170);
     int comboW = max(SX(180), cw - comboX - margin);
     hComboLang_ = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
-        comboX, SX(22), comboW, SX(140),
+        comboX, y - SX(4), comboW, SX(140),
         hWnd_, (HMENU)IDC_COMBO_LANG,
         nullptr, nullptr);
+    y += rowH + SX(18);
 
     // Use Virtual Desktop Enhancement
     hChkUseVD_ = CreateWindowExW(0, L"BUTTON", L"",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        margin, SX(70), cw - 2 * margin, rowH,
+        margin, y, cw - 2 * margin, rowH,
         hWnd_, (HMENU)IDC_CHK_USEVD,
         nullptr, nullptr);
+    y += rowH + SX(8);
+
+    // --- NEW: Use Collection Mode ---
+    hChkUseCollection_ = CreateWindowExW(0, L"BUTTON", L"",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        margin, y, cw - 2 * margin, rowH,
+        hWnd_, (HMENU)IDC_CHK_USE_COLLECTION_MODE,
+        nullptr, nullptr);
+    y += rowH + SX(20);
+
 
     // Hotkey: Minimize Top Window
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        margin, SX(116), labelW, SX(20),
+        margin, y + SX(4), labelW, SX(20),
         hWnd_, (HMENU)IDC_LABEL_HK_MIN, nullptr, nullptr);
 
     int hkW = SX(220);
     int hkX = cw - margin - hkW;
     hHkMinTop_ = CreateWindowExW(0, HOTKEY_CLASS, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        hkX, SX(112), hkW, rowH,
+        hkX, y, hkW, rowH,
         hWnd_, (HMENU)IDC_HOTKEY_MIN_TOP,
         nullptr, nullptr);
+    y += rowH + gap;
 
     // Hotkey: Hide All Windows
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        margin, SX(152), labelW, SX(20),
+        margin, y + SX(4), labelW, SX(20),
         hWnd_, (HMENU)IDC_LABEL_HK_HIDE_ALL, nullptr, nullptr);
 
     hHkHideAll_ = CreateWindowExW(0, HOTKEY_CLASS, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        hkX, SX(148), hkW, rowH,
+        hkX, y, hkW, rowH,
         hWnd_, (HMENU)IDC_HOTKEY_HIDE_ALL,
         nullptr, nullptr);
+    y += rowH + gap;
+
+    // --- NEW: Hotkey: Show Collection ---
+    CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
+        margin, y + SX(4), labelW, SX(20),
+        hWnd_, (HMENU)IDC_LABEL_HK_SHOW_COLLECTION, nullptr, nullptr);
+
+    hHkShowCollection_ = CreateWindowExW(0, HOTKEY_CLASS, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        hkX, y, hkW, rowH,
+        hWnd_, (HMENU)IDC_HOTKEY_SHOW_COLLECTION,
+        nullptr, nullptr);
+    y += rowH + gap + SX(8);
+
 
     // Hotkey Tip
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        margin, SX(190), cw - 2 * margin, tipH,
+        margin, y, cw - 2 * margin, tipH,
         hWnd_, (HMENU)IDC_LABEL_HK_TIP, nullptr, nullptr);
 
     // Buttons: Aligned to the bottom right
@@ -235,9 +265,11 @@ void SettingsDialog::BuildUi()
     setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_HIDE_ALL));
     setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_TIP));
     setFont(hBtnSave_); setFont(hBtnCancel_);
+    setFont(hChkUseCollection_); setFont(hHkShowCollection_); // --- NEW ---
+    setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_SHOW_COLLECTION)); // --- NEW ---
 
     // Set initial values
-    SendMessageW(hComboLang_, CB_ADDSTRING, 0, (LPARAM)L"ÖÐÎÄ (Chinese)");
+    SendMessageW(hComboLang_, CB_ADDSTRING, 0, (LPARAM)L"ä¸­æ–‡ (Chinese)");
     SendMessageW(hComboLang_, CB_ADDSTRING, 0, (LPARAM)L"English");
     SendMessageW(hComboLang_, CB_SETCURSEL,
         (cur_.language == Language::English) ? 1 : 0, 0);
@@ -249,6 +281,12 @@ void SettingsDialog::BuildUi()
         MakeHotkeyWord(cur_.hkMinTop), 0);
     SendMessageW(hHkHideAll_, HKM_SETHOTKEY,
         MakeHotkeyWord(cur_.hkHideAll), 0);
+
+    // --- NEW ---
+    SendMessageW(hChkUseCollection_, BM_SETCHECK,
+        cur_.useCollectionMode ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(hHkShowCollection_, HKM_SETHOTKEY,
+        MakeHotkeyWord(cur_.hkShowCollection), 0);
 }
 void SettingsDialog::ApplyLocalization()
 {
@@ -264,6 +302,11 @@ void SettingsDialog::ApplyLocalization()
         S("settings_hotkey_tip"));
     SetWindowTextW(hBtnSave_, S("settings_btn_save"));
     SetWindowTextW(hBtnCancel_, S("settings_btn_cancel"));
+
+    // --- NEW ---
+    SetWindowTextW(hChkUseCollection_, S("settings_use_collection_mode"));
+    SetWindowTextW(GetDlgItem(hWnd_, IDC_LABEL_HK_SHOW_COLLECTION),
+        S("settings_hotkey_show_collection"));
 }
 
 void SettingsDialog::CenterToParent()
@@ -343,6 +386,12 @@ void SettingsDialog::OnSave()
         (WORD)SendMessageW(hHkMinTop_, HKM_GETHOTKEY, 0, 0));
     s.hkHideAll = FromHotkeyWord(
         (WORD)SendMessageW(hHkHideAll_, HKM_GETHOTKEY, 0, 0));
+
+    // --- NEW ---
+    s.useCollectionMode =
+        (SendMessageW(hChkUseCollection_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    s.hkShowCollection = FromHotkeyWord(
+        (WORD)SendMessageW(hHkShowCollection_, HKM_GETHOTKEY, 0, 0));
 
     result_ = s;
     saved_ = true;

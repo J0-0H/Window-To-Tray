@@ -49,6 +49,7 @@ bool SettingsManager::Load() {
     s.useVirtualDesktop = FromIniBool(L"General", L"UseVirtualDesktop", s.useVirtualDesktop, path);
     UINT langNum = FromIniInt(L"General", L"Language", (UINT)s.language, path);
     s.language = (langNum == 1) ? I18N::Language::English : I18N::Language::Chinese;
+    s.useCollectionMode = FromIniBool(L"General", L"UseCollectionMode", s.useCollectionMode, path); // --- NEW ---
 
     // [Hotkeys]
     s.hkMinTop.modifiers = FromIniInt(L"Hotkeys", L"MinTop_Mod", s.hkMinTop.modifiers, path);
@@ -56,6 +57,10 @@ bool SettingsManager::Load() {
 
     s.hkHideAll.modifiers = FromIniInt(L"Hotkeys", L"HideAll_Mod", s.hkHideAll.modifiers, path);
     s.hkHideAll.vk = FromIniInt(L"Hotkeys", L"HideAll_Vk", s.hkHideAll.vk, path);
+
+    // --- NEW ---
+    s.hkShowCollection.modifiers = FromIniInt(L"Hotkeys", L"ShowCollection_Mod", s.hkShowCollection.modifiers, path);
+    s.hkShowCollection.vk = FromIniInt(L"Hotkeys", L"ShowCollection_Vk", s.hkShowCollection.vk, path);
 
     current_ = s;
     return true;
@@ -68,6 +73,7 @@ bool SettingsManager::Save() const {
     // [General]
     WriteIniBool(L"General", L"UseVirtualDesktop", s.useVirtualDesktop, path);
     WriteIniInt(L"General", L"Language", (UINT)s.language, path);
+    WriteIniBool(L"General", L"UseCollectionMode", s.useCollectionMode, path); // --- NEW ---
 
     // [Hotkeys]
     WriteIniInt(L"Hotkeys", L"MinTop_Mod", s.hkMinTop.modifiers, path);
@@ -75,6 +81,10 @@ bool SettingsManager::Save() const {
 
     WriteIniInt(L"Hotkeys", L"HideAll_Mod", s.hkHideAll.modifiers, path);
     WriteIniInt(L"Hotkeys", L"HideAll_Vk", s.hkHideAll.vk, path);
+
+    // --- NEW ---
+    WriteIniInt(L"Hotkeys", L"ShowCollection_Mod", s.hkShowCollection.modifiers, path);
+    WriteIniInt(L"Hotkeys", L"ShowCollection_Vk", s.hkShowCollection.vk, path);
 
     return true;
 }

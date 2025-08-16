@@ -1,4 +1,4 @@
-#include "Strings.h"
+ï»¿#include "Strings.h"
 #include <cstring>
 
 namespace I18N {
@@ -11,30 +11,37 @@ namespace I18N {
     Language GetLanguage() { return g_lang; }
 
     static const wchar_t* zh(const char* key) {
-        if (std::strcmp(key, "menu_restore_all") == 0) return L"»Ö¸´ËùÓĞ´°¿Ú";
-        if (std::strcmp(key, "menu_about") == 0)       return L"¹ØÓÚ";
-        if (std::strcmp(key, "menu_exit") == 0)        return L"ÍË³ö";
-        if (std::strcmp(key, "menu_settings") == 0)    return L"ÉèÖÃ¡­";
+        if (std::strcmp(key, "menu_restore_all") == 0) return L"æ¢å¤æ‰€æœ‰çª—å£";
+        if (std::strcmp(key, "menu_about") == 0)       return L"å…³äº";
+        if (std::strcmp(key, "menu_exit") == 0)        return L"é€€å‡º";
+        if (std::strcmp(key, "menu_settings") == 0)    return L"è®¾ç½®â€¦";
 
-        if (std::strcmp(key, "about_title") == 0)      return L"¹ØÓÚ";
-        if (std::strcmp(key, "about_text") == 0)       return L"Window-To-Tray\n\n×ó¼üµã»÷ÍĞÅÌÍ¼±ê¼´¿É»Ö¸´¶ÔÓ¦´°¿Ú£¬\nÓÒ¼üµã»÷¿ÉÏÔÊ¾²Ëµ¥£¬\n³ÌĞòÍË³öÊ±»á×Ô¶¯»Ö¸´ËùÓĞ´°¿Ú²¢ÇåÀíĞéÄâ×ÀÃæ¡£";
+        if (std::strcmp(key, "about_title") == 0)      return L"å…³äº";
+        if (std::strcmp(key, "about_text") == 0)       return L"Window-To-Tray\n\nå·¦é”®ç‚¹å‡»æ‰˜ç›˜å›¾æ ‡å³å¯æ¢å¤å¯¹åº”çª—å£ï¼Œ\nå³é”®ç‚¹å‡»å¯æ˜¾ç¤ºèœå•ï¼Œ\nç¨‹åºé€€å‡ºæ—¶ä¼šè‡ªåŠ¨æ¢å¤æ‰€æœ‰çª—å£å¹¶æ¸…ç†è™šæ‹Ÿæ¡Œé¢ã€‚";
         if (std::strcmp(key, "tray_tooltip") == 0)     return L"Window-To-Tray";
 
-        if (std::strcmp(key, "error_com_init") == 0)           return L"COM ¿â³õÊ¼»¯Ê§°Ü£¡";
-        if (std::strcmp(key, "error_hotkey_reg_failed") == 0)  return L"×¢²á¿ì½İ¼üÊ§°Ü£º¿ÉÄÜÓëÏµÍ³»òÆäËü³ÌĞò³åÍ»¡£";
-        if (std::strcmp(key, "already_running") == 0)          return L"Ó¦ÓÃ³ÌĞòÒÑÔÚÔËĞĞ£¡";
+        if (std::strcmp(key, "error_com_init") == 0)           return L"COM åº“åˆå§‹åŒ–å¤±è´¥ï¼";
+        if (std::strcmp(key, "error_hotkey_reg_failed") == 0)  return L"æ³¨å†Œå¿«æ·é”®å¤±è´¥ï¼šå¯èƒ½ä¸ç³»ç»Ÿæˆ–å…¶å®ƒç¨‹åºå†²çªã€‚";
+        if (std::strcmp(key, "already_running") == 0)          return L"åº”ç”¨ç¨‹åºå·²åœ¨è¿è¡Œï¼";
         if (std::strcmp(key, "already_running_title") == 0)    return L"Window-To-Tray";
 
-        if (std::strcmp(key, "untitled_window") == 0)          return L"(ÎŞ±êÌâ´°¿Ú)";
+        if (std::strcmp(key, "untitled_window") == 0)          return L"(æ— æ ‡é¢˜çª—å£)";
 
-        if (std::strcmp(key, "settings_title") == 0)           return L"ÉèÖÃ";
-        if (std::strcmp(key, "settings_use_virtual_desktop") == 0) return L"Ê¹ÓÃĞéÄâ×ÀÃæÔöÇ¿ UWP Òş²Ø";
-        if (std::strcmp(key, "settings_language") == 0)        return L"ÓïÑÔ";
-        if (std::strcmp(key, "settings_hotkey_min_top") == 0)  return L"¿ì½İ¼ü£º×îĞ¡»¯¶¥²¿´°¿Ú";
-        if (std::strcmp(key, "settings_hotkey_hide_all") == 0) return L"¿ì½İ¼ü£ºÒş²ØËùÓĞ´°¿Ú";
-        if (std::strcmp(key, "settings_btn_save") == 0)        return L"±£´æ";
-        if (std::strcmp(key, "settings_btn_cancel") == 0)      return L"È¡Ïû";
-        if (std::strcmp(key, "settings_hotkey_tip") == 0)      return L"ÌáÊ¾£º½¨ÒéÊ¹ÓÃ Ctrl/Shift/Alt ×éºÏ£»Èç×¢²áÊ§°ÜÔò¿ÉÄÜÓëÏµÍ³»òËû³ÌĞò³åÍ»¡£";
+        if (std::strcmp(key, "settings_title") == 0)           return L"è®¾ç½®";
+        if (std::strcmp(key, "settings_use_virtual_desktop") == 0) return L"ä½¿ç”¨è™šæ‹Ÿæ¡Œé¢å¢å¼º UWP éšè—";
+        if (std::strcmp(key, "settings_language") == 0)        return L"è¯­è¨€";
+        if (std::strcmp(key, "settings_hotkey_min_top") == 0)  return L"å¿«æ·é”®ï¼šæœ€å°åŒ–é¡¶éƒ¨çª—å£";
+        if (std::strcmp(key, "settings_hotkey_hide_all") == 0) return L"å¿«æ·é”®ï¼šéšè—æ‰€æœ‰çª—å£";
+        if (std::strcmp(key, "settings_btn_save") == 0)        return L"ä¿å­˜";
+        if (std::strcmp(key, "settings_btn_cancel") == 0)      return L"å–æ¶ˆ";
+        if (std::strcmp(key, "settings_hotkey_tip") == 0)      return L"æç¤ºï¼šå»ºè®®ä½¿ç”¨ Ctrl/Shift/Alt ç»„åˆï¼›å¦‚æ³¨å†Œå¤±è´¥åˆ™å¯èƒ½ä¸ç³»ç»Ÿæˆ–ä»–ç¨‹åºå†²çªã€‚";
+
+        if (std::strcmp(key, "settings_use_collection_mode") == 0) return L"å¯ç”¨èšåˆæ”¶çº³æ¨¡å¼ (å·¦é”®å•å‡»æ‰˜ç›˜å›¾æ ‡æ—¶)";
+        if (std::strcmp(key, "settings_hotkey_show_collection") == 0) return L"å¿«æ·é”®ï¼šæ˜¾ç¤ºæ”¶çº³çª—å£";
+        if (std::strcmp(key, "collection_window_title") == 0) return L"å·²æ”¶çº³çš„çª—å£";
+        // --- NEW ---
+        if (std::strcmp(key, "collection_disable_mode_button") == 0) return L"é€€å‡ºæ”¶çº³æ¨¡å¼";
+
         return L"";
     }
 
@@ -42,7 +49,7 @@ namespace I18N {
         if (std::strcmp(key, "menu_restore_all") == 0) return L"Restore All Windows";
         if (std::strcmp(key, "menu_about") == 0)       return L"About";
         if (std::strcmp(key, "menu_exit") == 0)        return L"Exit";
-        if (std::strcmp(key, "menu_settings") == 0)    return L"Settings¡­";
+        if (std::strcmp(key, "menu_settings") == 0)    return L"Settingsâ€¦";
 
         if (std::strcmp(key, "about_title") == 0)      return L"About";
         if (std::strcmp(key, "about_text") == 0)       return L"Window-To-Tray\n\nLeft click a tray icon to restore the window.\nRight click to open the menu.\nAll windows will be restored and hidden desktops cleaned up on exit.";
@@ -63,6 +70,13 @@ namespace I18N {
         if (std::strcmp(key, "settings_btn_save") == 0)        return L"Save";
         if (std::strcmp(key, "settings_btn_cancel") == 0)      return L"Cancel";
         if (std::strcmp(key, "settings_hotkey_tip") == 0)      return L"Tip: Use Ctrl/Shift/Alt combinations; if registration fails it may be due to conflicts.";
+
+        if (std::strcmp(key, "settings_use_collection_mode") == 0) return L"Enable collection mode (on left-click tray icon)";
+        if (std::strcmp(key, "settings_hotkey_show_collection") == 0) return L"Hotkey: Show collection window";
+        if (std::strcmp(key, "collection_window_title") == 0) return L"Collected Windows";
+        // --- NEW ---
+        if (std::strcmp(key, "collection_disable_mode_button") == 0) return L"Exit Collection Mode";
+
         return L"";
     }
 

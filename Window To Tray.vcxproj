@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CollectionWindow.h" />
     <ClInclude Include="GlobalHook.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="Settings.h" />
@@ -30,6 +31,7 @@
     <ClInclude Include="WindowManager.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="CollectionWindow.cpp" />
     <ClCompile Include="GlobalHook.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Settings.cpp" />

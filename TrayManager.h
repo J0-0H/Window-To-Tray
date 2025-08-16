@@ -11,6 +11,7 @@
 #include <shellapi.h>
 #include <map>
 #include <string>
+#include <functional> // --- NEW: For std::function ---
 
 struct TrayIcon {
     NOTIFYICONDATA nid{};
@@ -19,33 +20,49 @@ struct TrayIcon {
     HICON          originalIcon{ nullptr };
     bool           wasMaximized{ false };
     bool           ownsIcon{ false };
-    bool           isUwp{ false };     // 新增：是否为 UWP 窗口
+    bool           isUwp{ false };
     int            originalDesktop{ 0 };
 };
 
 class TrayManager {
 public:
-    explicit TrayManager(HWND mainWindow);
+    // --- NEW: Callback type to request showing the collection window ---
+    using ShowCollectionCallback = std::function<void()>;
+
+    // --- MODIFIED: Constructor now accepts a callback ---
+    explicit TrayManager(HWND mainWindow, ShowCollectionCallback showCollectionCb);
     ~TrayManager();
 
-    bool AddWindowToTray(HWND hwnd, int originalDesktop);
+    bool AddWindowToTray(HWND hwnd, int originalDesktop, bool createIndividualIcon);
     bool RestoreWindowFromTray(UINT iconId);
     void RestoreAllWindows();
     void RemoveAllTrayIcons();
 
+    // The central handler for all tray icon messages
     bool HandleTrayMessage(WPARAM wParam, LPARAM lParam);
+
+    // --- NEW: Method to update the manager's state based on settings ---
+    void SetCollectionMode(bool isEnabled);
 
     // Check if a window is already in the tray.
     bool IsWindowInTray(HWND hwnd) const;
+
+    // Get a constant reference to the tray icons map.
+    const std::map<UINT, TrayIcon>& GetTrayIcons() const;
 
 private:
     HWND                     mainWindow;
     std::map<UINT, TrayIcon> trayIcons;
     UINT                     nextIconId;
 
+    // --- NEW: State and callback for collection mode ---
+    bool                     collectionModeActive_;
+    ShowCollectionCallback   showCollectionCallback_;
+
     HICON        GetWindowIcon(HWND hwnd, bool& owns);
     std::wstring GetWindowTitle(HWND hwnd);
-    void         ShowTrayMenu(HWND hwnd, POINT pt);
+    // This is now the single source for the context menu
+    void         ShowContextMenu(POINT pt);
 };
 
 #endif

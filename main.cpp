@@ -15,6 +15,7 @@
 #include "Settings.h"
 #include "SettingsDialog.h"
 #include "Strings.h"
+#include "CollectionWindow.h" 
 
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -41,6 +42,28 @@
 // Custom message to perform "minimize to tray" on the UI thread
 #define WM_MINIMIZE_TO_TRAY (WM_APP + 1)
 
+
+// --- MODIFIED: Renamed helper function to avoid conflict with Windows API ---
+static UINT GetAppDpiForWindow(HWND hwnd) {
+    HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        // Use the real GetDpiForWindow if available
+        using PFN_GetDpiForWindow = UINT(WINAPI*)(HWND);
+        auto pGetDpiForWindow = reinterpret_cast<PFN_GetDpiForWindow>(GetProcAddress(user32, "GetDpiForWindow"));
+        if (pGetDpiForWindow) {
+            UINT dpi = pGetDpiForWindow(hwnd);
+            if (dpi > 0) return dpi;
+        }
+    }
+    // Fallback for older systems
+    HDC hdc = GetDC(hwnd);
+    if (hdc) {
+        int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+        ReleaseDC(hwnd, hdc);
+        return dpi;
+    }
+    return 96; // Default DPI
+}
 
 // Enable Per-Monitor-DPI Awareness
 static void EnableDpiAwareness()
@@ -123,6 +146,7 @@ private:
     void OnHotkey(WPARAM hotkeyId);
     void MinimizeTopWindow();
     void HideAllVisibleWindows();
+    void DisableCollectionModeAndSave();
 
     // Data Members
     static WindowToTrayApp* instance;
@@ -133,6 +157,10 @@ private:
     VirtualDesktopManager* virtualDesktopManager;
     NOTIFYICONDATA          mainTrayIcon;
     bool                    mainTrayIconCreated;
+
+    // For owner-drawn menu
+    HFONT                   hMenuFont_;
+    UINT                    currentDpi_;
 
     // Settings
     SettingsManager         settingsMgr;
@@ -148,7 +176,9 @@ WindowToTrayApp::WindowToTrayApp()
     mouseHook(nullptr),
     trayManager(nullptr),
     virtualDesktopManager(nullptr),
-    mainTrayIconCreated(false)
+    mainTrayIconCreated(false),
+    hMenuFont_(nullptr),
+    currentDpi_(96)
 {
     instance = this;
     ::ZeroMemory(&mainTrayIcon, sizeof(mainTrayIcon));
@@ -156,7 +186,6 @@ WindowToTrayApp::WindowToTrayApp()
 
 WindowToTrayApp::~WindowToTrayApp()
 {
-    // Restore all windows and remove the hidden desktop before exiting
     if (trayManager)
     {
         trayManager->RestoreAllWindows();
@@ -174,6 +203,10 @@ WindowToTrayApp::~WindowToTrayApp()
     delete virtualDesktopManager;
     instance = nullptr;
 
+    if (hMenuFont_) {
+        ::DeleteObject(hMenuFont_);
+    }
+
     ::CoUninitialize();
 }
 
@@ -181,29 +214,24 @@ bool WindowToTrayApp::Initialize(HINSTANCE hInst)
 {
     hInstance = hInst;
 
-    // COM
     if (FAILED(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)))
     {
         ::MessageBox(nullptr, I18N::S("error_com_init"), I18N::S("already_running_title"), MB_OK | MB_ICONERROR);
         return false;
     }
 
-    // Common Controls
     INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES };
     ::InitCommonControlsEx(&icc);
 
-    // Load and apply settings
     settingsMgr.Load();
     settings = settingsMgr.Get();
     I18N::SetLanguage(settings.language);
     WindowManager::SetUseVirtualDesktop(settings.useVirtualDesktop);
 
-    // Initialize Virtual Desktop Manager
     virtualDesktopManager = new VirtualDesktopManager();
     virtualDesktopManager->Initialize();
     WindowManager::SetVirtualDesktopManager(virtualDesktopManager);
 
-    // Register window class
     WNDCLASSEX wc{ sizeof(wc) };
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
@@ -214,12 +242,17 @@ bool WindowToTrayApp::Initialize(HINSTANCE hInst)
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     if (!::RegisterClassEx(&wc)) return false;
 
-    // Create the hidden main window
     CreateMainWindow(hInstance);
     if (!mainWindow) return false;
 
-    // Initialize Tray Manager and Hooks
-    trayManager = new TrayManager(mainWindow);
+    trayManager = new TrayManager(mainWindow, [this]() {
+        CollectionWindow::Show(
+            this->mainWindow,
+            *this->trayManager,
+            CollectionWindow::PositioningMode::NearTray,
+            [this] { this->DisableCollectionModeAndSave(); }
+        );
+        });
 
     mouseHook = new GlobalHook();
     mouseHook->SetMouseCallback(
@@ -228,12 +261,10 @@ bool WindowToTrayApp::Initialize(HINSTANCE hInst)
     {
         ::MessageBox(nullptr, L"Failed to install global mouse hook!",
             I18N::S("already_running_title"), MB_OK | MB_ICONERROR);
-        // Non-fatal, continue execution
     }
 
     CreateTrayIcon();
 
-    // Apply settings (language, virtual desktop, hotkeys)
     ApplySettingsToRuntime();
     RegisterHotkeys();
 
@@ -246,7 +277,7 @@ void WindowToTrayApp::CreateMainWindow(HINSTANCE hInst)
         0, L"WindowToTrayClass", L"Window-To-Tray",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 400, 300,
-        nullptr, nullptr, hInst, nullptr);
+        nullptr, nullptr, hInst, this);
 
     if (mainWindow) ::ShowWindow(mainWindow, SW_HIDE);
 }
@@ -280,13 +311,13 @@ void WindowToTrayApp::RemoveTrayIcon()
 
 void WindowToTrayApp::ApplySettingsToRuntime()
 {
-    // Language
     I18N::SetLanguage(settings.language);
-
-    // Virtual Desktop
     WindowManager::SetUseVirtualDesktop(settings.useVirtualDesktop);
 
-    // Update main tray icon's tooltip (for multilingual support)
+    if (trayManager) {
+        trayManager->SetCollectionMode(settings.useCollectionMode);
+    }
+
     if (mainTrayIconCreated) {
         wcscpy_s(mainTrayIcon.szTip, I18N::S("tray_tooltip"));
         mainTrayIcon.uFlags = NIF_TIP | NIF_ICON | NIF_MESSAGE;
@@ -297,7 +328,7 @@ void WindowToTrayApp::ApplySettingsToRuntime()
 void WindowToTrayApp::RegisterHotkeys()
 {
     UnregisterHotkeys();
-    bool ok1 = true, ok2 = true;
+    bool ok1 = true, ok2 = true, ok3 = true;
 
     if (settings.hkMinTop.vk) {
         ok1 = !!::RegisterHotKey(mainWindow, ID_HOTKEY_MIN_TOP, settings.hkMinTop.modifiers, settings.hkMinTop.vk);
@@ -305,7 +336,11 @@ void WindowToTrayApp::RegisterHotkeys()
     if (settings.hkHideAll.vk) {
         ok2 = !!::RegisterHotKey(mainWindow, ID_HOTKEY_HIDE_ALL, settings.hkHideAll.modifiers, settings.hkHideAll.vk);
     }
-    if (!ok1 || !ok2) {
+    if (settings.hkShowCollection.vk) {
+        ok3 = !!::RegisterHotKey(mainWindow, ID_HOTKEY_SHOW_COLLECTION, settings.hkShowCollection.modifiers, settings.hkShowCollection.vk);
+    }
+
+    if (!ok1 || !ok2 || !ok3) {
         ::MessageBoxW(mainWindow, I18N::S("error_hotkey_reg_failed"), I18N::S("already_running_title"), MB_OK | MB_ICONWARNING);
     }
 }
@@ -313,6 +348,7 @@ void WindowToTrayApp::UnregisterHotkeys()
 {
     ::UnregisterHotKey(mainWindow, ID_HOTKEY_MIN_TOP);
     ::UnregisterHotKey(mainWindow, ID_HOTKEY_HIDE_ALL);
+    ::UnregisterHotKey(mainWindow, ID_HOTKEY_SHOW_COLLECTION);
 }
 
 void WindowToTrayApp::OnHotkey(WPARAM hotkeyId)
@@ -323,13 +359,16 @@ void WindowToTrayApp::OnHotkey(WPARAM hotkeyId)
     else if (hotkeyId == ID_HOTKEY_HIDE_ALL) {
         HideAllVisibleWindows();
     }
+    else if (hotkeyId == ID_HOTKEY_SHOW_COLLECTION) {
+        CollectionWindow::Show(mainWindow, *trayManager, CollectionWindow::PositioningMode::CenterScreen,
+            [this] { this->DisableCollectionModeAndSave(); });
+    }
 }
 
 void WindowToTrayApp::MinimizeTopWindow()
 {
     HWND tgt = ::GetForegroundWindow();
 
-    // If the current foreground window is not valid, try the window under the cursor
     if (!WindowManager::IsValidTargetWindow(tgt)) {
         POINT pt; ::GetCursorPos(&pt);
         HWND h = ::WindowFromPoint(pt);
@@ -342,10 +381,9 @@ void WindowToTrayApp::MinimizeTopWindow()
         currentDesktop = virtualDesktopManager->GetCurrentDesktopNumber();
 
     if (WindowManager::MinimizeToTray(tgt))
-        trayManager->AddWindowToTray(tgt, currentDesktop);
+        trayManager->AddWindowToTray(tgt, currentDesktop, !settings.useCollectionMode);
 }
 
-// Hides all windows that are actually visible on the current desktop
 void WindowToTrayApp::HideAllVisibleWindows()
 {
     int currentDesktop = -1;
@@ -359,7 +397,6 @@ void WindowToTrayApp::HideAllVisibleWindows()
         std::vector<HWND>* list;
     } ctx{ this, currentDesktop, new std::vector<HWND>() };
 
-    // Collection phase: Collect first, then process in batch to avoid Z-order changes during enumeration
     ::EnumWindows([](HWND hwnd, LPARAM lp)->BOOL {
         auto& c = *reinterpret_cast<Ctx*>(lp);
 
@@ -370,38 +407,44 @@ void WindowToTrayApp::HideAllVisibleWindows()
         if (::IsIconic(hwnd)) return TRUE;
         if (IsWindowCloaked(hwnd)) return TRUE;
 
-        // If virtual desktops are available, the window must be on the current desktop
         if (c.currentDesktop >= 0 && c.app->virtualDesktopManager && c.app->virtualDesktopManager->IsAvailable()) {
             int wndDesk = c.app->virtualDesktopManager->GetWindowDesktopNumber(hwnd);
             if (wndDesk >= 0 && wndDesk != c.currentDesktop) return TRUE;
         }
 
-        // Must intersect with a monitor's work area to avoid off-screen/background windows
         if (!IntersectsMonitorWorkArea(hwnd)) return TRUE;
 
         c.list->push_back(hwnd);
         return TRUE;
         }, reinterpret_cast<LPARAM>(&ctx));
 
-    // Execution phase
     for (HWND h : *ctx.list) {
         if (!::IsWindow(h)) continue;
-        // Re-validate for safety
         if (!WindowManager::IsValidTargetWindow(h)) continue;
         if (WindowManager::MinimizeToTray(h)) {
             int originalDesktop = (currentDesktop >= 0) ? currentDesktop : 0;
-            trayManager->AddWindowToTray(h, originalDesktop);
+            trayManager->AddWindowToTray(h, originalDesktop, !settings.useCollectionMode);
         }
     }
 
     delete ctx.list;
 }
 
+void WindowToTrayApp::DisableCollectionModeAndSave()
+{
+    if (settings.useCollectionMode) {
+        settings.useCollectionMode = false;
+        settingsMgr.Set(settings);
+        settingsMgr.Save();
+        trayManager->RestoreAllWindows();
+        ApplySettingsToRuntime();
+    }
+}
+
 void WindowToTrayApp::OnMouseHook(POINT /*pt*/, HWND targetWindow)
 {
     if (!WindowManager::IsValidTargetWindow(targetWindow)) return;
 
-    // Let the UI thread execute the hiding logic
     ::PostMessage(mainWindow, WM_MINIMIZE_TO_TRAY,
         reinterpret_cast<WPARAM>(targetWindow), 0);
 }
@@ -420,8 +463,18 @@ int WindowToTrayApp::Run()
 LRESULT CALLBACK WindowToTrayApp::WindowProc(
     HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    return instance ?
-        instance->HandleMessage(hwnd, msg, wParam, lParam) :
+    WindowToTrayApp* pThis = nullptr;
+    if (msg == WM_NCCREATE) {
+        CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
+        pThis = (WindowToTrayApp*)pCreate->lpCreateParams;
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)pThis);
+    }
+    else {
+        pThis = (WindowToTrayApp*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    }
+
+    return pThis ?
+        pThis->HandleMessage(hwnd, msg, wParam, lParam) :
         ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
@@ -430,7 +483,6 @@ LRESULT WindowToTrayApp::HandleMessage(
 {
     switch (msg)
     {
-        // Hide request from the hook thread
     case WM_MINIMIZE_TO_TRAY:
     {
         HWND tgt = reinterpret_cast<HWND>(wParam);
@@ -440,46 +492,89 @@ LRESULT WindowToTrayApp::HandleMessage(
             currentDesktop = virtualDesktopManager->GetCurrentDesktopNumber();
 
         if (WindowManager::MinimizeToTray(tgt))
-            trayManager->AddWindowToTray(tgt, currentDesktop);
+            trayManager->AddWindowToTray(tgt, currentDesktop, !settings.useCollectionMode);
         return 0;
     }
 
-    // Global hotkey
     case WM_HOTKEY:
         OnHotkey(wParam);
         return 0;
 
-        // Tray icon callback - handles clicks on all tray icons
     case WM_TRAY_CALLBACK:
     {
-        UINT iconId = static_cast<UINT>(LOWORD(wParam));
-        UINT eventCode = static_cast<UINT>(lParam);
-
-        // Main tray icon (uID==1)
-        if (iconId == 1) {
-            // Right-click for context menu
-            if (eventCode == WM_RBUTTONDOWN || eventCode == WM_RBUTTONUP || eventCode == WM_CONTEXTMENU) {
-                POINT pt; ::GetCursorPos(&pt);
-                HMENU m = ::CreatePopupMenu();
-                ::AppendMenu(m, MF_STRING, IDM_RESTORE_ALL, I18N::S("menu_restore_all"));
-                ::AppendMenu(m, MF_STRING, IDM_SETTINGS, I18N::S("menu_settings"));
-                ::AppendMenu(m, MF_SEPARATOR, 0, nullptr);
-                ::AppendMenu(m, MF_STRING, IDM_ABOUT, I18N::S("menu_about"));
-                ::AppendMenu(m, MF_STRING, IDM_EXIT, I18N::S("menu_exit"));
-                ::SetForegroundWindow(hwnd);
-                ::TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
-                ::DestroyMenu(m);
-                return 0;
-            }
-            return 0;
+        if (trayManager) {
+            trayManager->HandleTrayMessage(wParam, lParam);
         }
-
-        // Other tray icons (from windows) are handled by TrayManager
-        trayManager->HandleTrayMessage(wParam, lParam);
         return 0;
     }
 
-    // Main menu commands
+    case WM_MEASUREITEM:
+    {
+        LPMEASUREITEMSTRUCT lpmis = (LPMEASUREITEMSTRUCT)lParam;
+        if (lpmis->CtlType == ODT_MENU) {
+            UINT dpi = GetAppDpiForWindow(hwnd); // Use renamed helper function
+            if (hMenuFont_ == nullptr || currentDpi_ != dpi) {
+                if (hMenuFont_) ::DeleteObject(hMenuFont_);
+                currentDpi_ = dpi;
+                LOGFONTW lf = {};
+                lf.lfHeight = -MulDiv(10, dpi, 72);
+                lf.lfWeight = FW_NORMAL;
+                wcscpy_s(lf.lfFaceName, L"Segoe UI");
+                hMenuFont_ = ::CreateFontIndirectW(&lf);
+            }
+
+            const wchar_t* text = reinterpret_cast<const wchar_t*>(lpmis->itemData);
+            if (text) {
+                HDC hdc = ::GetDC(hwnd);
+                HFONT oldFont = (HFONT)::SelectObject(hdc, hMenuFont_);
+                SIZE sz;
+                ::GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);
+                ::SelectObject(hdc, oldFont);
+                ::ReleaseDC(hwnd, hdc);
+
+                lpmis->itemWidth = sz.cx + ::MulDiv(40, dpi, 96);
+                lpmis->itemHeight = sz.cy + ::MulDiv(16, dpi, 96);
+            }
+        }
+        return TRUE;
+    }
+    case WM_DRAWITEM:
+    {
+        LPDRAWITEMSTRUCT lpdis = (LPDRAWITEMSTRUCT)lParam;
+        if (lpdis->CtlType == ODT_MENU && hMenuFont_) {
+            const wchar_t* text = reinterpret_cast<const wchar_t*>(lpdis->itemData);
+            if (text) {
+                HDC hdc = lpdis->hDC;
+                UINT dpi = GetAppDpiForWindow(hwnd); // Use renamed helper function
+
+                COLORREF bgColor = ::GetSysColor(COLOR_MENU);
+                COLORREF textColor = ::GetSysColor(COLOR_MENUTEXT);
+
+                if (lpdis->itemState & ODS_SELECTED) {
+                    bgColor = ::GetSysColor(COLOR_HIGHLIGHT);
+                    textColor = ::GetSysColor(COLOR_HIGHLIGHTTEXT);
+                }
+                if (lpdis->itemState & ODS_DISABLED) {
+                    textColor = ::GetSysColor(COLOR_GRAYTEXT);
+                }
+
+                HBRUSH hbr = ::CreateSolidBrush(bgColor);
+                ::FillRect(hdc, &lpdis->rcItem, hbr);
+                ::DeleteObject(hbr);
+
+                HFONT oldFont = (HFONT)::SelectObject(hdc, hMenuFont_);
+                ::SetBkMode(hdc, TRANSPARENT);
+                ::SetTextColor(hdc, textColor);
+
+                RECT textRect = lpdis->rcItem;
+                textRect.left += ::MulDiv(20, dpi, 96);
+                ::DrawTextW(hdc, text, -1, &textRect, DT_SINGLELINE | DT_VCENTER);
+                ::SelectObject(hdc, oldFont);
+            }
+        }
+        return TRUE;
+    }
+
     case WM_COMMAND:
         switch (LOWORD(wParam))
         {
@@ -515,7 +610,6 @@ LRESULT WindowToTrayApp::HandleMessage(
         }
         break;
 
-        // Automatically restore all windows and clean up on destroy
     case WM_DESTROY:
         trayManager->RestoreAllWindows();
         if (virtualDesktopManager)
