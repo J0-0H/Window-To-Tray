@@ -11,7 +11,7 @@
 #include <shellapi.h>
 #include <map>
 #include <string>
-#include <functional> // --- NEW: For std::function ---
+#include <functional>
 
 struct TrayIcon {
     NOTIFYICONDATA nid{};
@@ -26,26 +26,23 @@ struct TrayIcon {
 
 class TrayManager {
 public:
-    // --- NEW: Callback type to request showing the collection window ---
     using ShowCollectionCallback = std::function<void()>;
 
-    // --- MODIFIED: Constructor now accepts a callback ---
     explicit TrayManager(HWND mainWindow, ShowCollectionCallback showCollectionCb);
     ~TrayManager();
 
-    bool AddWindowToTray(HWND hwnd, int originalDesktop, bool createIndividualIcon);
-    bool RestoreWindowFromTray(UINT iconId);
+    [[nodiscard]] bool AddWindowToTray(HWND hwnd, int originalDesktop, bool createIndividualIcon);
+    [[nodiscard]] bool RestoreWindowFromTray(UINT iconId);
     void RestoreAllWindows();
     void RemoveAllTrayIcons();
 
     // The central handler for all tray icon messages
-    bool HandleTrayMessage(WPARAM wParam, LPARAM lParam);
+    [[nodiscard]] bool HandleTrayMessage(WPARAM wParam, LPARAM lParam);
 
-    // --- NEW: Method to update the manager's state based on settings ---
     void SetCollectionMode(bool isEnabled);
 
     // Check if a window is already in the tray.
-    bool IsWindowInTray(HWND hwnd) const;
+    [[nodiscard]] bool IsWindowInTray(HWND hwnd) const;
 
     // Get a constant reference to the tray icons map.
     const std::map<UINT, TrayIcon>& GetTrayIcons() const;
@@ -55,13 +52,11 @@ private:
     std::map<UINT, TrayIcon> trayIcons;
     UINT                     nextIconId;
 
-    // --- NEW: State and callback for collection mode ---
     bool                     collectionModeActive_;
     ShowCollectionCallback   showCollectionCallback_;
 
     HICON        GetWindowIcon(HWND hwnd, bool& owns);
     std::wstring GetWindowTitle(HWND hwnd);
-    // This is now the single source for the context menu
     void         ShowContextMenu(POINT pt);
 };
 

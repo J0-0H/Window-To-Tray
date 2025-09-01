@@ -85,10 +85,11 @@ struct ContentBounds {
     }
 };
 
+// --- OPTIMIZED: Rewritten to use GDI+ for high-quality scaling ---
 HICON RemoveIconBackground_FloodFillAndScale(HICON hIcon, bool& outOwnsNewIcon)
 {
     outOwnsNewIcon = false;
-    if (!hIcon) return nullptr;
+    if (!hIcon || !EnsureGdiPlus()) return nullptr;
 
     ICONINFO info{};
     if (!::GetIconInfo(hIcon, &info)) return nullptr;
@@ -109,46 +110,41 @@ HICON RemoveIconBackground_FloodFillAndScale(HICON hIcon, bool& outOwnsNewIcon)
         return nullptr;
     }
 
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = bm.bmWidth;
-    bi.bmiHeader.biHeight = -bm.bmHeight;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
     std::vector<DWORD> pixels(bm.bmWidth * bm.bmHeight);
-    HDC hdc = ::GetDC(nullptr);
-    if (!::GetDIBits(hdc, info.hbmColor, 0, bm.bmHeight, pixels.data(), &bi, DIB_RGB_COLORS)) {
-        ::ReleaseDC(nullptr, hdc);
-        cleanup();
-        return nullptr;
+    {
+        Bitmap srcBitmap(info.hbmColor, nullptr);
+        if (srcBitmap.GetLastStatus() != Ok) {
+            cleanup();
+            return nullptr;
+        }
+        Rect rect(0, 0, bm.bmWidth, bm.bmHeight);
+        BitmapData data;
+        if (srcBitmap.LockBits(&rect, ImageLockModeRead, PixelFormat32bppARGB, &data) != Ok) {
+            cleanup();
+            return nullptr;
+        }
+        memcpy(pixels.data(), data.Scan0, pixels.size() * sizeof(DWORD));
+        srcBitmap.UnlockBits(&data);
     }
-    ::ReleaseDC(nullptr, hdc);
 
     DWORD bgColor = pixels[0];
-    if ((bgColor >> 24) != 0) {
+    if ((bgColor >> 24) != 0) { // If not transparent, flood-fill from corners
         std::queue<POINT> q;
         auto AddSeed = [&](int x, int y) {
             if (x >= 0 && x < bm.bmWidth && y >= 0 && y < bm.bmHeight) {
                 DWORD& pixel = pixels[y * bm.bmWidth + x];
                 if (pixel == bgColor) {
                     q.push({ x, y });
-                    pixel = 0;
+                    pixel = 0; // Make transparent
                 }
             }
             };
-        AddSeed(0, 0);
-        AddSeed(bm.bmWidth - 1, 0);
-        AddSeed(0, bm.bmHeight - 1);
-        AddSeed(bm.bmWidth - 1, bm.bmHeight - 1);
+        AddSeed(0, 0); AddSeed(bm.bmWidth - 1, 0);
+        AddSeed(0, bm.bmHeight - 1); AddSeed(bm.bmWidth - 1, bm.bmHeight - 1);
         while (!q.empty()) {
-            POINT p = q.front();
-            q.pop();
-            AddSeed(p.x + 1, p.y);
-            AddSeed(p.x - 1, p.y);
-            AddSeed(p.x, p.y + 1);
-            AddSeed(p.x, p.y - 1);
+            POINT p = q.front(); q.pop();
+            AddSeed(p.x + 1, p.y); AddSeed(p.x - 1, p.y);
+            AddSeed(p.x, p.y + 1); AddSeed(p.x, p.y - 1);
         }
     }
 
@@ -164,84 +160,49 @@ HICON RemoveIconBackground_FloodFillAndScale(HICON hIcon, bool& outOwnsNewIcon)
     if (bounds.isEmpty) {
         cleanup();
         outOwnsNewIcon = true;
-        return CopyIcon(hIcon);
+        return CopyIcon(hIcon); // Return a copy as we own it
     }
 
     int contentWidth = bounds.width();
     int contentHeight = bounds.height();
     int minDistance = bounds.getMinDistanceToEdge(bm.bmWidth, bm.bmHeight);
 
-    double maxScaleX = (double)bm.bmWidth / contentWidth;
-    double maxScaleY = (double)bm.bmHeight / contentHeight;
-    double scale = std::min(maxScaleX, maxScaleY);
-    scale = std::min(scale, 3.0);
-    scale = std::max(scale, 1.0);
+    double scale = std::min((double)bm.bmWidth / contentWidth, (double)bm.bmHeight / contentHeight);
+    scale = std::min(scale, 3.0); // Limit max scale
+    scale = std::max(scale, 1.0); // Don't shrink
     if (minDistance < 4) {
-        scale = std::min(scale, 1.2);
+        scale = std::min(scale, 1.2); // Limit scale if content is already near edge
     }
 
+    HICON hNewIcon = nullptr;
     if (scale > 1.01) {
-        std::vector<DWORD> scaledPixels(bm.bmWidth * bm.bmHeight, 0);
+        Bitmap finalBitmap(bm.bmWidth, bm.bmHeight, PixelFormat32bppARGB);
+        Graphics g(&finalBitmap);
+        g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+
+        // Create a temporary bitmap containing only the icon content
+        Bitmap contentBitmap(contentWidth, contentHeight, bm.bmWidth * 4, PixelFormat32bppARGB,
+            (BYTE*)pixels.data() + (bounds.top * bm.bmWidth + bounds.left) * 4);
+
         int newContentWidth = (int)(contentWidth * scale);
         int newContentHeight = (int)(contentHeight * scale);
         int offsetX = (bm.bmWidth - newContentWidth) / 2;
         int offsetY = (bm.bmHeight - newContentHeight) / 2;
-        for (int y = 0; y < newContentHeight && y + offsetY < bm.bmHeight; y++) {
-            for (int x = 0; x < newContentWidth && x + offsetX < bm.bmWidth; x++) {
-                int srcX = bounds.left + (int)((double)x / scale);
-                int srcY = bounds.top + (int)((double)y / scale);
-                if (srcX >= bounds.left && srcX <= bounds.right &&
-                    srcY >= bounds.top && srcY <= bounds.bottom &&
-                    srcX < bm.bmWidth && srcY < bm.bmHeight) {
-                    DWORD srcPixel = pixels[srcY * bm.bmWidth + srcX];
-                    if ((srcPixel >> 24) > 16) {
-                        int dstX = x + offsetX;
-                        int dstY = y + offsetY;
-                        if (dstX >= 0 && dstX < bm.bmWidth && dstY >= 0 && dstY < bm.bmHeight) {
-                            scaledPixels[dstY * bm.bmWidth + dstX] = srcPixel;
-                        }
-                    }
-                }
-            }
-        }
-        pixels = scaledPixels;
+
+        g.DrawImage(&contentBitmap, offsetX, offsetY, newContentWidth, newContentHeight);
+        finalBitmap.GetHICON(&hNewIcon);
     }
 
-    HBITMAP hNewBitmapColor = ::CreateBitmap(bm.bmWidth, bm.bmHeight, 1, 32, pixels.data());
-    if (!hNewBitmapColor) {
-        cleanup();
-        return nullptr;
+    if (!hNewIcon) {
+        // If no scaling was performed or failed, create icon from (potentially modified) pixel buffer
+        Bitmap finalBitmap(bm.bmWidth, bm.bmHeight, bm.bmWidth * 4, PixelFormat32bppARGB, (BYTE*)pixels.data());
+        finalBitmap.GetHICON(&hNewIcon);
     }
 
-    int stride = ((bm.bmWidth + 15) >> 4) << 1;
-    std::vector<BYTE> maskBits(stride * bm.bmHeight, 0xFF);
-    for (int y = 0; y < bm.bmHeight; ++y) {
-        for (int x = 0; x < bm.bmWidth; ++x) {
-            if ((pixels[y * bm.bmWidth + x] >> 24) > 127) {
-                maskBits[y * stride + (x >> 3)] &= ~(1 << (7 - (x % 8)));
-            }
-        }
-    }
-    HBITMAP hNewBitmapMask = ::CreateBitmap(bm.bmWidth, bm.bmHeight, 1, 1, maskBits.data());
-
-    if (!hNewBitmapMask) {
-        ::DeleteObject(hNewBitmapColor);
-        cleanup();
-        return nullptr;
-    }
-
-    ICONINFO newIconInfo{};
-    newIconInfo.fIcon = TRUE;
-    newIconInfo.hbmColor = hNewBitmapColor;
-    newIconInfo.hbmMask = hNewBitmapMask;
-    HICON hNewIcon = ::CreateIconIndirect(&newIconInfo);
-
-    ::DeleteObject(hNewBitmapColor);
-    ::DeleteObject(hNewBitmapMask);
     cleanup();
 
     if (hNewIcon) {
-        outOwnsNewIcon = true;
+        outOwnsNewIcon = true; // GDI+ GetHICON creates a new icon that we must manage
     }
     return hNewIcon;
 }
@@ -262,8 +223,7 @@ void TrayManager::SetCollectionMode(bool isEnabled) {
 bool TrayManager::AddWindowToTray(HWND hwnd, int originalDesktop, bool createIndividualIcon)
 {
     if (!IsWindow(hwnd)) return false;
-    for (auto& p : trayIcons)
-        if (p.second.targetWindow == hwnd) return false;
+    if (IsWindowInTray(hwnd)) return false;
 
     TrayIcon ti{};
     ti.targetWindow = hwnd;
@@ -317,6 +277,7 @@ bool TrayManager::RestoreWindowFromTray(UINT iconId)
 
     trayIcons.erase(it);
 
+    // Check if any UWP windows are left in the tray
     bool anyUwpLeft = false;
     for (const auto& kv : trayIcons) {
         if (kv.second.isUwp) { anyUwpLeft = true; break; }
@@ -359,7 +320,7 @@ bool TrayManager::HandleTrayMessage(WPARAM wParam, LPARAM lParam)
             return true;
         }
         else {
-            if (id != 1) {
+            if (id != 1) { // Ignore clicks on the main app icon
                 return RestoreWindowFromTray(id);
             }
         }
@@ -386,49 +347,51 @@ const std::map<UINT, TrayIcon>& TrayManager::GetTrayIcons() const
     return trayIcons;
 }
 
+// --- OPTIMIZED: Fixed HICON resource leaks ---
 HICON TrayManager::GetWindowIcon(HWND hwnd, bool& owns)
 {
     owns = false;
+    HICON originalIcon = nullptr;
+    bool originalOwns = false;
 
-    {
-        int   sz = ::GetSystemMetrics(SM_CXICON);
-        HICON hUwp = nullptr;
-        bool  uwpOwns = false;
+    // --- Helper lambda to process and clean up icons ---
+    auto processIcon = [&](HICON hIn, bool inOwns) -> HICON {
+        bool processedOwns = false;
+        HICON hProcessed = RemoveIconBackground_FloodFillAndScale(hIn, processedOwns);
 
-        if (UwpIconUtils::GetUwpWindowIcon(hwnd, sz, hUwp, uwpOwns) && hUwp)
-        {
-            bool processedIconNeedsOwning = false;
-            HICON hProcessedIcon = RemoveIconBackground_FloodFillAndScale(hUwp, processedIconNeedsOwning);
-
-            if (hProcessedIcon) {
-                if (uwpOwns) {
-                    ::DestroyIcon(hUwp);
-                }
-                owns = processedIconNeedsOwning;
-                return hProcessedIcon;
+        if (hProcessed) {
+            if (inOwns) {
+                ::DestroyIcon(hIn); // Destroy original if we owned it
             }
-
-            owns = uwpOwns;
-            return hUwp;
+            owns = processedOwns; // We now own the new processed icon
+            return hProcessed;
         }
-    }
 
-    HICON ico = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_SMALL2, 0);
-    if (!ico) ico = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_SMALL, 0);
-    if (!ico) ico = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_BIG, 0);
-    if (!ico) ico = (HICON)::GetClassLongPtr(hwnd, GCLP_HICONSM);
-    if (!ico) ico = (HICON)::GetClassLongPtr(hwnd, GCLP_HICON);
-    if (ico)
+        // Processing failed, return original
+        owns = inOwns;
+        return hIn;
+        };
+
+    // 1. UWP icon retrieval
+    int sz = ::GetSystemMetrics(SM_CXICON);
+    if (UwpIconUtils::GetUwpWindowIcon(hwnd, sz, originalIcon, originalOwns) && originalIcon)
     {
-        bool processedIconNeedsOwning = false;
-        HICON hProcessedIcon = RemoveIconBackground_FloodFillAndScale(ico, processedIconNeedsOwning);
-        if (hProcessedIcon) {
-            owns = processedIconNeedsOwning;
-            return hProcessedIcon;
-        }
-        return ico;
+        return processIcon(originalIcon, originalOwns);
     }
 
+    // 2. Traditional Win32 icon retrieval
+    originalIcon = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_SMALL2, 0);
+    if (!originalIcon) originalIcon = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_SMALL, 0);
+    if (!originalIcon) originalIcon = (HICON)::SendMessage(hwnd, WM_GETICON, ICON_BIG, 0);
+    if (!originalIcon) originalIcon = (HICON)::GetClassLongPtr(hwnd, GCLP_HICONSM);
+    if (!originalIcon) originalIcon = (HICON)::GetClassLongPtr(hwnd, GCLP_HICON);
+    if (originalIcon)
+    {
+        // We don't own icons from SendMessage/GetClassLongPtr
+        return processIcon(originalIcon, false);
+    }
+
+    // 3. Shell properties (modern apps)
     IPropertyStore* store = nullptr;
     if (SUCCEEDED(::SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&store))))
     {
@@ -440,19 +403,22 @@ HICON TrayManager::GetWindowIcon(HWND hwnd, bool& owns)
             if (SUCCEEDED(::SHLoadIndirectString(var.pwszVal, resolved, ARRAYSIZE(resolved), nullptr)) &&
                 ::PathFileExistsW(resolved))
             {
-                int sz = ::GetSystemMetrics(SM_CXSMICON);
-                HICON h = LoadPngAsIcon(resolved, sz);
-                if (h) {
-                    owns = true;
-                    store->Release();
-                    return h;
+                int iconSize = ::GetSystemMetrics(SM_CXSMICON);
+                originalIcon = LoadPngAsIcon(resolved, iconSize);
+                if (originalIcon) {
+                    // LoadPngAsIcon creates an icon we must destroy.
+                    originalOwns = true;
                 }
             }
         }
         PropVariantClear(&var);
         store->Release();
+        if (originalIcon) {
+            return processIcon(originalIcon, originalOwns);
+        }
     }
 
+    // 4. Fallback: extract from the host executable
     DWORD pid = 0; ::GetWindowThreadProcessId(hwnd, &pid);
     if (pid)
     {
@@ -462,27 +428,32 @@ HICON TrayManager::GetWindowIcon(HWND hwnd, bool& owns)
             wchar_t exe[MAX_PATH]{}; DWORD len = ARRAYSIZE(exe);
             if (::QueryFullProcessImageNameW(hProc, 0, exe, &len))
             {
-                HICON hSmall = nullptr;
-                UINT  extracted = ::ExtractIconExW(exe, 0, nullptr, &hSmall, 1);
-                if (extracted > 0 && hSmall && hSmall != (HICON)1)
+                UINT extracted = ::ExtractIconExW(exe, 0, nullptr, &originalIcon, 1);
+                if (extracted > 0 && originalIcon && originalIcon != (HICON)1)
                 {
-                    owns = true;
-                    ::CloseHandle(hProc);
-                    return hSmall;
+                    // ExtractIconExW gives us an icon we must destroy.
+                    originalOwns = true;
+                }
+                else {
+                    originalIcon = nullptr;
                 }
             }
             ::CloseHandle(hProc);
+            if (originalIcon) {
+                return processIcon(originalIcon, originalOwns);
+            }
         }
     }
 
+    // 5. Absolute fallback: generic application icon
     SHSTOCKICONINFO sii{ sizeof(sii) };
-    if (SUCCEEDED(::SHGetStockIconInfo(
-        SIID_APPLICATION, SHGSI_ICON | SHGSI_SMALLICON, &sii)))
+    if (SUCCEEDED(::SHGetStockIconInfo(SIID_APPLICATION, SHGSI_ICON | SHGSI_SMALLICON, &sii)))
     {
-        owns = true;
-        return sii.hIcon;
+        // sii.hIcon is a copy that we must destroy.
+        return processIcon(sii.hIcon, true);
     }
 
+    // 6. Last resort: load from our own resources (we don't own this one)
     return (HICON)::LoadImageW(
         GetModuleHandleW(nullptr),
         MAKEINTRESOURCE(IDI_TRAY_ICON),
@@ -503,11 +474,17 @@ void TrayManager::ShowContextMenu(POINT pt)
     HMENU m = ::CreatePopupMenu();
     if (!m) return;
 
-    ::AppendMenuW(m, MF_OWNERDRAW, IDM_RESTORE_ALL, I18N::S("menu_restore_all"));
-    ::AppendMenuW(m, MF_OWNERDRAW, IDM_SETTINGS, I18N::S("menu_settings"));
-    ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(m, MF_OWNERDRAW, IDM_ABOUT, I18N::S("menu_about"));
-    ::AppendMenuW(m, MF_OWNERDRAW, IDM_EXIT, I18N::S("menu_exit"));
+    const UINT ID_MENU_SEPARATOR = (UINT)-1;
+
+    ::AppendMenuW(m, MF_OWNERDRAW | MF_STRING, IDM_RESTORE_ALL, I18N::S("menu_restore_all"));
+    ::AppendMenuW(m, MF_OWNERDRAW | MF_STRING, IDM_SETTINGS, I18N::S("menu_settings"));
+    ::AppendMenuW(m, MF_OWNERDRAW | MF_STRING, ID_MENU_SEPARATOR, nullptr);
+    ::AppendMenuW(m, MF_OWNERDRAW | MF_STRING, IDM_ABOUT, I18N::S("menu_about"));
+    ::AppendMenuW(m, MF_OWNERDRAW | MF_STRING, IDM_EXIT, I18N::S("menu_exit"));
+
+    if (trayIcons.empty()) {
+        ::EnableMenuItem(m, IDM_RESTORE_ALL, MF_BYCOMMAND | MF_GRAYED);
+    }
 
     ::SetForegroundWindow(mainWindow);
     ::TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, mainWindow, nullptr);

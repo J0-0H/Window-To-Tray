@@ -7,6 +7,7 @@
 #include <vector>
 #include <algorithm>
 #include <dwmapi.h>
+#include <gdiplus.h>
 #include "GlobalHook.h"
 #include "TrayManager.h"
 #include "WindowManager.h"
@@ -19,8 +20,10 @@
 
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "gdiplus.lib")
 
- // Compatibility definitions for NIN_* constants
+using namespace Gdiplus;
+
 #ifndef NIN_SELECT
 #define NIN_SELECT (WM_USER + 0)
 #endif
@@ -33,21 +36,27 @@
 #ifndef NIN_POPUPCLOSE
 #define NIN_POPUPCLOSE 0x0407
 #endif
-
-// Define WM_TRAY_CALLBACK
 #ifndef WM_TRAY_CALLBACK
 #define WM_TRAY_CALLBACK (WM_USER + 1)
 #endif
-
-// Custom message to perform "minimize to tray" on the UI thread
 #define WM_MINIMIZE_TO_TRAY (WM_APP + 1)
 
+class GdiplusManager {
+public:
+    GdiplusManager() {
+        GdiplusStartupInput si;
+        GdiplusStartup(&token_, &si, nullptr);
+    }
+    ~GdiplusManager() {
+        GdiplusShutdown(token_);
+    }
+private:
+    ULONG_PTR token_;
+};
 
-// --- MODIFIED: Renamed helper function to avoid conflict with Windows API ---
 static UINT GetAppDpiForWindow(HWND hwnd) {
     HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
     if (user32) {
-        // Use the real GetDpiForWindow if available
         using PFN_GetDpiForWindow = UINT(WINAPI*)(HWND);
         auto pGetDpiForWindow = reinterpret_cast<PFN_GetDpiForWindow>(GetProcAddress(user32, "GetDpiForWindow"));
         if (pGetDpiForWindow) {
@@ -55,17 +64,15 @@ static UINT GetAppDpiForWindow(HWND hwnd) {
             if (dpi > 0) return dpi;
         }
     }
-    // Fallback for older systems
     HDC hdc = GetDC(hwnd);
     if (hdc) {
         int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
         ReleaseDC(hwnd, hdc);
         return dpi;
     }
-    return 96; // Default DPI
+    return 96;
 }
 
-// Enable Per-Monitor-DPI Awareness
 static void EnableDpiAwareness()
 {
     HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
@@ -76,7 +83,7 @@ static void EnableDpiAwareness()
             reinterpret_cast<FNC_SetDpiAwarenessContext>(
                 ::GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
         if (SetProcessDpiAwarenessContext &&
-            SetProcessDpiAwarenessContext(reinterpret_cast<HANDLE>(-4))) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            SetProcessDpiAwarenessContext(reinterpret_cast<HANDLE>(-4)))
             return;
     }
     HMODULE shcore = ::LoadLibraryW(L"shcore.dll");
@@ -85,8 +92,7 @@ static void EnableDpiAwareness()
         using FNC_SetProcessDpiAwareness = HRESULT(WINAPI*)(int);
         auto SetProcessDpiAwareness =
             reinterpret_cast<FNC_SetProcessDpiAwareness>(::GetProcAddress(shcore, "SetProcessDpiAwareness"));
-        if (SetProcessDpiAwareness &&
-            SUCCEEDED(SetProcessDpiAwareness(2))) // PROCESS_PER_MONITOR_DPI_AWARE
+        if (SetProcessDpiAwareness && SUCCEEDED(SetProcessDpiAwareness(2)))
         {
             ::FreeLibrary(shcore);
             return;
@@ -101,7 +107,6 @@ static void EnableDpiAwareness()
     }
 }
 
-// Helper filters: only process windows actually visible on the current desktop
 static bool IsWindowCloaked(HWND hwnd) {
     BOOL cloaked = FALSE;
     ::DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
@@ -119,27 +124,23 @@ static bool IntersectsMonitorWorkArea(HWND hwnd) {
     return ::IntersectRect(&inter, &rc, &mi.rcWork) != 0;
 }
 
-
 class WindowToTrayApp {
 public:
     WindowToTrayApp();
     ~WindowToTrayApp();
 
-    bool Initialize(HINSTANCE hInstance);
-    int  Run();
+    [[nodiscard]] bool Initialize(HINSTANCE hInstance);
+    int Run();
 
 private:
-    // Window & Messages
     static LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT HandleMessage(HWND, UINT, WPARAM, LPARAM);
 
-    // Internal Helpers
     void OnMouseHook(POINT pt, HWND targetWindow);
     void CreateMainWindow(HINSTANCE);
     void CreateTrayIcon();
     void RemoveTrayIcon();
 
-    // Settings & Hotkeys
     void ApplySettingsToRuntime();
     void RegisterHotkeys();
     void UnregisterHotkeys();
@@ -148,7 +149,14 @@ private:
     void HideAllVisibleWindows();
     void DisableCollectionModeAndSave();
 
-    // Data Members
+    // --- NEW: Owner-drawn menu helpers ---
+    void OnMeasureMenuItem(HWND hwnd, LPMEASUREITEMSTRUCT lpmis);
+    void OnDrawMenuItem(HWND hwnd, LPDRAWITEMSTRUCT lpdis);
+    void DrawMenuItemBackground(Graphics& g, LPDRAWITEMSTRUCT lpdis, UINT dpi);
+    void DrawMenuItemSeparator(Graphics& g, LPDRAWITEMSTRUCT lpdis, UINT dpi);
+    void DrawMenuItemText(Graphics& g, LPDRAWITEMSTRUCT lpdis);
+
+
     static WindowToTrayApp* instance;
     HINSTANCE               hInstance;
     HWND                    mainWindow;
@@ -158,17 +166,14 @@ private:
     NOTIFYICONDATA          mainTrayIcon;
     bool                    mainTrayIconCreated;
 
-    // For owner-drawn menu
     HFONT                   hMenuFont_;
     UINT                    currentDpi_;
 
-    // Settings
     SettingsManager         settingsMgr;
     Settings                settings;
 };
 
 WindowToTrayApp* WindowToTrayApp::instance = nullptr;
-
 
 WindowToTrayApp::WindowToTrayApp()
     : hInstance(nullptr),
@@ -198,6 +203,9 @@ WindowToTrayApp::~WindowToTrayApp()
 
     UnregisterHotkeys();
     RemoveTrayIcon();
+
+    WindowManager::Cleanup(); // --- NEW: Cleanup WindowManager resources ---
+
     delete trayManager;
     delete mouseHook;
     delete virtualDesktopManager;
@@ -226,6 +234,11 @@ bool WindowToTrayApp::Initialize(HINSTANCE hInst)
     settingsMgr.Load();
     settings = settingsMgr.Get();
     I18N::SetLanguage(settings.language);
+
+    if (!WindowManager::Initialize()) // --- NEW: Initialize WindowManager ---
+    {
+        // Handle error if necessary, e.g., log or show a message
+    }
     WindowManager::SetUseVirtualDesktop(settings.useVirtualDesktop);
 
     virtualDesktopManager = new VirtualDesktopManager();
@@ -264,7 +277,6 @@ bool WindowToTrayApp::Initialize(HINSTANCE hInst)
     }
 
     CreateTrayIcon();
-
     ApplySettingsToRuntime();
     RegisterHotkeys();
 
@@ -344,6 +356,7 @@ void WindowToTrayApp::RegisterHotkeys()
         ::MessageBoxW(mainWindow, I18N::S("error_hotkey_reg_failed"), I18N::S("already_running_title"), MB_OK | MB_ICONWARNING);
     }
 }
+
 void WindowToTrayApp::UnregisterHotkeys()
 {
     ::UnregisterHotKey(mainWindow, ID_HOTKEY_MIN_TOP);
@@ -478,6 +491,127 @@ LRESULT CALLBACK WindowToTrayApp::WindowProc(
         ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+// --- NEW: Refactored owner-drawn menu implementation ---
+
+void WindowToTrayApp::OnMeasureMenuItem(HWND hwnd, LPMEASUREITEMSTRUCT lpmis)
+{
+    if (lpmis->CtlType != ODT_MENU) return;
+
+    UINT dpi = GetAppDpiForWindow(hwnd);
+
+    // Custom separator height
+    if (lpmis->itemID == (UINT)-1) {
+        lpmis->itemWidth = 0; // Width is controlled by the menu
+        lpmis->itemHeight = MulDiv(8, dpi, 96); // Separators are thin
+        return;
+    }
+
+    // Ensure menu font is created for the current DPI
+    if (hMenuFont_ == nullptr || currentDpi_ != dpi) {
+        if (hMenuFont_) ::DeleteObject(hMenuFont_);
+        currentDpi_ = dpi;
+        LOGFONTW lf = {};
+        lf.lfHeight = -MulDiv(10, dpi, 72); // 10pt font size
+        lf.lfWeight = FW_NORMAL;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI Variable"); // Win11 default
+        hMenuFont_ = ::CreateFontIndirectW(&lf);
+        if (!hMenuFont_) { // Fallback
+            wcscpy_s(lf.lfFaceName, L"Segoe UI");
+            hMenuFont_ = ::CreateFontIndirectW(&lf);
+        }
+    }
+
+    const wchar_t* text = reinterpret_cast<const wchar_t*>(lpmis->itemData);
+    if (text && hMenuFont_) {
+        HDC hdc = ::GetDC(hwnd);
+        HFONT oldFont = (HFONT)::SelectObject(hdc, hMenuFont_);
+        SIZE sz;
+        ::GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);
+        ::SelectObject(hdc, oldFont);
+        ::ReleaseDC(hwnd, hdc);
+
+        // Add padding for a modern look
+        lpmis->itemWidth = sz.cx + ::MulDiv(50, dpi, 96);
+        lpmis->itemHeight = sz.cy + ::MulDiv(24, dpi, 96);
+    }
+}
+
+void WindowToTrayApp::DrawMenuItemBackground(Graphics& g, LPDRAWITEMSTRUCT lpdis, UINT dpi)
+{
+    Color bgColor = Color(249, 249, 249);
+    Color highlightColor = Color(234, 234, 234);
+
+    RectF itemRect(REAL(lpdis->rcItem.left), REAL(lpdis->rcItem.top), REAL(lpdis->rcItem.right - lpdis->rcItem.left), REAL(lpdis->rcItem.bottom - lpdis->rcItem.top));
+    SolidBrush bgBrush(bgColor);
+    g.FillRectangle(&bgBrush, itemRect);
+
+    if (lpdis->itemState & ODS_SELECTED) {
+        SolidBrush highlightBrush(highlightColor);
+        RectF highlightRect = itemRect;
+        highlightRect.Inflate(-REAL(MulDiv(3, dpi, 96)), -REAL(MulDiv(3, dpi, 96)));
+
+        GraphicsPath path;
+        REAL r = REAL(MulDiv(4, dpi, 96)); // Corner radius
+        path.AddArc(highlightRect.X, highlightRect.Y, r * 2, r * 2, 180, 90);
+        path.AddArc(highlightRect.GetRight() - (r * 2), highlightRect.Y, r * 2, r * 2, 270, 90);
+        path.AddArc(highlightRect.GetRight() - (r * 2), highlightRect.GetBottom() - (r * 2), r * 2, r * 2, 0, 90);
+        path.AddArc(highlightRect.X, highlightRect.GetBottom() - (r * 2), r * 2, r * 2, 90, 90);
+        path.CloseFigure();
+        g.FillPath(&highlightBrush, &path);
+    }
+}
+
+void WindowToTrayApp::DrawMenuItemSeparator(Graphics& g, LPDRAWITEMSTRUCT lpdis, UINT dpi)
+{
+    Color separatorColor = Color(220, 220, 220);
+    Pen pen(separatorColor, 1.0f);
+    int margin = MulDiv(16, dpi, 96);
+    int y = lpdis->rcItem.top + (lpdis->rcItem.bottom - lpdis->rcItem.top) / 2;
+    g.DrawLine(&pen, margin, y, lpdis->rcItem.right - margin, y);
+}
+
+void WindowToTrayApp::DrawMenuItemText(Graphics& g, LPDRAWITEMSTRUCT lpdis)
+{
+    const wchar_t* text = reinterpret_cast<const wchar_t*>(lpdis->itemData);
+    if (!text || !hMenuFont_) return;
+
+    Color textColor = Color(20, 20, 20);
+    Color disabledColor = Color(160, 160, 160);
+
+    SolidBrush textBrush((lpdis->itemState & ODS_DISABLED) ? disabledColor : textColor);
+    Font gdiFont(lpdis->hDC, hMenuFont_);
+    StringFormat stringFormat;
+    stringFormat.SetAlignment(StringAlignmentNear);
+    stringFormat.SetLineAlignment(StringAlignmentCenter);
+
+    RectF textRect(REAL(lpdis->rcItem.left), REAL(lpdis->rcItem.top), REAL(lpdis->rcItem.right - lpdis->rcItem.left), REAL(lpdis->rcItem.bottom - lpdis->rcItem.top));
+    textRect.X += REAL(MulDiv(20, currentDpi_, 96));
+    textRect.Width -= REAL(MulDiv(25, currentDpi_, 96));
+
+    g.DrawString(text, -1, &gdiFont, textRect, &stringFormat, &textBrush);
+}
+
+void WindowToTrayApp::OnDrawMenuItem(HWND, LPDRAWITEMSTRUCT lpdis)
+{
+    if (lpdis->CtlType != ODT_MENU) return;
+
+    UINT dpi = GetAppDpiForWindow(lpdis->hwndItem);
+    const UINT separatorId = (UINT)-1;
+
+    Graphics graphics(lpdis->hDC);
+    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+
+    DrawMenuItemBackground(graphics, lpdis, dpi);
+
+    if (lpdis->itemID == separatorId) {
+        DrawMenuItemSeparator(graphics, lpdis, dpi);
+    }
+    else {
+        DrawMenuItemText(graphics, lpdis);
+    }
+}
+
 LRESULT WindowToTrayApp::HandleMessage(
     HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -486,20 +620,16 @@ LRESULT WindowToTrayApp::HandleMessage(
     case WM_MINIMIZE_TO_TRAY:
     {
         HWND tgt = reinterpret_cast<HWND>(wParam);
-
         int currentDesktop = 0;
         if (virtualDesktopManager && virtualDesktopManager->IsAvailable())
             currentDesktop = virtualDesktopManager->GetCurrentDesktopNumber();
-
         if (WindowManager::MinimizeToTray(tgt))
             trayManager->AddWindowToTray(tgt, currentDesktop, !settings.useCollectionMode);
         return 0;
     }
-
     case WM_HOTKEY:
         OnHotkey(wParam);
         return 0;
-
     case WM_TRAY_CALLBACK:
     {
         if (trayManager) {
@@ -507,74 +637,12 @@ LRESULT WindowToTrayApp::HandleMessage(
         }
         return 0;
     }
-
     case WM_MEASUREITEM:
-    {
-        LPMEASUREITEMSTRUCT lpmis = (LPMEASUREITEMSTRUCT)lParam;
-        if (lpmis->CtlType == ODT_MENU) {
-            UINT dpi = GetAppDpiForWindow(hwnd); // Use renamed helper function
-            if (hMenuFont_ == nullptr || currentDpi_ != dpi) {
-                if (hMenuFont_) ::DeleteObject(hMenuFont_);
-                currentDpi_ = dpi;
-                LOGFONTW lf = {};
-                lf.lfHeight = -MulDiv(10, dpi, 72);
-                lf.lfWeight = FW_NORMAL;
-                wcscpy_s(lf.lfFaceName, L"Segoe UI");
-                hMenuFont_ = ::CreateFontIndirectW(&lf);
-            }
-
-            const wchar_t* text = reinterpret_cast<const wchar_t*>(lpmis->itemData);
-            if (text) {
-                HDC hdc = ::GetDC(hwnd);
-                HFONT oldFont = (HFONT)::SelectObject(hdc, hMenuFont_);
-                SIZE sz;
-                ::GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);
-                ::SelectObject(hdc, oldFont);
-                ::ReleaseDC(hwnd, hdc);
-
-                lpmis->itemWidth = sz.cx + ::MulDiv(40, dpi, 96);
-                lpmis->itemHeight = sz.cy + ::MulDiv(16, dpi, 96);
-            }
-        }
+        OnMeasureMenuItem(hwnd, (LPMEASUREITEMSTRUCT)lParam);
         return TRUE;
-    }
     case WM_DRAWITEM:
-    {
-        LPDRAWITEMSTRUCT lpdis = (LPDRAWITEMSTRUCT)lParam;
-        if (lpdis->CtlType == ODT_MENU && hMenuFont_) {
-            const wchar_t* text = reinterpret_cast<const wchar_t*>(lpdis->itemData);
-            if (text) {
-                HDC hdc = lpdis->hDC;
-                UINT dpi = GetAppDpiForWindow(hwnd); // Use renamed helper function
-
-                COLORREF bgColor = ::GetSysColor(COLOR_MENU);
-                COLORREF textColor = ::GetSysColor(COLOR_MENUTEXT);
-
-                if (lpdis->itemState & ODS_SELECTED) {
-                    bgColor = ::GetSysColor(COLOR_HIGHLIGHT);
-                    textColor = ::GetSysColor(COLOR_HIGHLIGHTTEXT);
-                }
-                if (lpdis->itemState & ODS_DISABLED) {
-                    textColor = ::GetSysColor(COLOR_GRAYTEXT);
-                }
-
-                HBRUSH hbr = ::CreateSolidBrush(bgColor);
-                ::FillRect(hdc, &lpdis->rcItem, hbr);
-                ::DeleteObject(hbr);
-
-                HFONT oldFont = (HFONT)::SelectObject(hdc, hMenuFont_);
-                ::SetBkMode(hdc, TRANSPARENT);
-                ::SetTextColor(hdc, textColor);
-
-                RECT textRect = lpdis->rcItem;
-                textRect.left += ::MulDiv(20, dpi, 96);
-                ::DrawTextW(hdc, text, -1, &textRect, DT_SINGLELINE | DT_VCENTER);
-                ::SelectObject(hdc, oldFont);
-            }
-        }
+        OnDrawMenuItem(hwnd, (LPDRAWITEMSTRUCT)lParam);
         return TRUE;
-    }
-
     case WM_COMMAND:
         switch (LOWORD(wParam))
         {
@@ -591,41 +659,28 @@ LRESULT WindowToTrayApp::HandleMessage(
             return 0;
         }
         case IDM_EXIT:
-            trayManager->RestoreAllWindows();
-            if (virtualDesktopManager)
-            {
-                virtualDesktopManager->ForceRemoveHiddenDesktop();
-            }
             ::PostQuitMessage(0);
             return 0;
-
         case IDM_RESTORE_ALL:
             trayManager->RestoreAllWindows();
             return 0;
-
         case IDM_ABOUT:
             ::MessageBox(hwnd, I18N::S("about_text"),
                 I18N::S("about_title"), MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         break;
-
     case WM_DESTROY:
-        trayManager->RestoreAllWindows();
-        if (virtualDesktopManager)
-        {
-            virtualDesktopManager->ForceRemoveHiddenDesktop();
-        }
         ::PostQuitMessage(0);
         return 0;
     }
     return ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-// WinMain
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
     EnableDpiAwareness();
+    GdiplusManager gdiplus;
 
     HANDLE mutex = ::CreateMutex(nullptr, TRUE, L"WindowToTrayAppMutex");
     if (::GetLastError() == ERROR_ALREADY_EXISTS)

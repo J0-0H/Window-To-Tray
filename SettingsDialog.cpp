@@ -1,10 +1,26 @@
 ﻿#include "SettingsDialog.h"
 #include <windowsx.h>
 #include <cassert>
+#include <dwmapi.h> // --- NEW: For DWM APIs like rounded corners ---
+#include <uxtheme.h> // --- NEW: For SetWindowTheme ---
+
+#pragma comment(lib, "dwmapi.lib") // --- NEW: Link dwmapi ---
+#pragma comment(lib, "UxTheme.lib") // --- NEW: Link uxtheme ---
 
 using namespace I18N;
 
 static const wchar_t* kWndClass = L"WTT_SettingsDialog";
+
+// --- NEW: Safe define for newer DWM attributes on older SDKs ---
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+#ifndef DWMSBT_MAINWINDOW
+#define DWMSBT_MAINWINDOW 2
+#endif
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 
 SettingsDialog::SettingsDialog(HWND parent, const Settings& current)
     : hParent_(parent)
@@ -44,6 +60,7 @@ bool SettingsDialog::Create()
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = kWndClass;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    // --- MODIFIED: Background will be handled in WM_ERASEBKGND for a flat look ---
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassExW(&wc);
 
@@ -70,9 +87,9 @@ bool SettingsDialog::Create()
     }
     auto Scale = [&](int v) { return MulDiv(v, (int)dpi_, 96); };
 
-    // Base size at 96 DPI, increased height for new options
+    // --- MODIFIED: Increased height for better spacing ---
     int baseW = 560;
-    int baseH = 420; // Increased height
+    int baseH = 440; // Increased height
     int winW = Scale(baseW);
     int winH = Scale(baseH);
 
@@ -88,7 +105,7 @@ bool SettingsDialog::Create()
     if (winW > workW - margin) winW = workW - margin;
     if (winH > workH - margin) winH = workH - margin;
     winW = max(winW, Scale(420));
-    winH = max(winH, Scale(360)); // Increased min height
+    winH = max(winH, Scale(380)); // Increased min height
 
     DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUPWINDOW;
 
@@ -102,6 +119,13 @@ bool SettingsDialog::Create()
         wc.hInstance, this);
 
     if (!hWnd_) return false;
+
+    // --- NEW: Apply Win11 style rounded corners ---
+    DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_ROUND;
+    ::DwmSetWindowAttribute(hWnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
+    // --- NEW: Try Mica/MainWindow backdrop for a subtle material ---
+    int backdrop = DWMSBT_MAINWINDOW;
+    ::DwmSetWindowAttribute(hWnd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
 
     BuildUi();
     ApplyLocalization();
@@ -151,30 +175,31 @@ void SettingsDialog::BuildUi()
     int cw = rc.right - rc.left;
     int ch = rc.bottom - rc.top;
 
-    const int margin = SX(30);
-    const int gap = SX(10);
-    const int labelW = SX(240);
-    const int rowH = SX(24);
+    // --- MODIFIED: Increased spacing for a modern look ---
+    const int margin = SX(25);
+    const int gap = SX(15);
+    const int labelW = SX(260);
+    const int rowH = SX(28);
     const int tipH = SX(40);
-    const int btnW = SX(100);
-    const int btnH = SX(30);
-    int y = SX(26);
+    const int btnW = SX(110);
+    const int btnH = SX(36);
+    int y = SX(30);
 
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
     // Language
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        margin, y, SX(120), SX(20),
+        margin, y + SX(4), SX(120), SX(20),
         hWnd_, (HMENU)IDC_LABEL_LANG, nullptr, nullptr);
 
     int comboX = SX(170);
     int comboW = max(SX(180), cw - comboX - margin);
     hComboLang_ = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
-        comboX, y - SX(4), comboW, SX(140),
+        comboX, y, comboW, SX(140),
         hWnd_, (HMENU)IDC_COMBO_LANG,
         nullptr, nullptr);
-    y += rowH + SX(18);
+    y += rowH + SX(22);
 
     // Use Virtual Desktop Enhancement
     hChkUseVD_ = CreateWindowExW(0, L"BUTTON", L"",
@@ -184,13 +209,13 @@ void SettingsDialog::BuildUi()
         nullptr, nullptr);
     y += rowH + SX(8);
 
-    // --- NEW: Use Collection Mode ---
+    // Use Collection Mode
     hChkUseCollection_ = CreateWindowExW(0, L"BUTTON", L"",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         margin, y, cw - 2 * margin, rowH,
         hWnd_, (HMENU)IDC_CHK_USE_COLLECTION_MODE,
         nullptr, nullptr);
-    y += rowH + SX(20);
+    y += rowH + SX(24);
 
 
     // Hotkey: Minimize Top Window
@@ -219,7 +244,7 @@ void SettingsDialog::BuildUi()
         nullptr, nullptr);
     y += rowH + gap;
 
-    // --- NEW: Hotkey: Show Collection ---
+    // Hotkey: Show Collection
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
         margin, y + SX(4), labelW, SX(20),
         hWnd_, (HMENU)IDC_LABEL_HK_SHOW_COLLECTION, nullptr, nullptr);
@@ -265,8 +290,11 @@ void SettingsDialog::BuildUi()
     setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_HIDE_ALL));
     setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_TIP));
     setFont(hBtnSave_); setFont(hBtnCancel_);
-    setFont(hChkUseCollection_); setFont(hHkShowCollection_); // --- NEW ---
-    setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_SHOW_COLLECTION)); // --- NEW ---
+    setFont(hChkUseCollection_); setFont(hHkShowCollection_);
+    setFont(GetDlgItem(hWnd_, IDC_LABEL_HK_SHOW_COLLECTION));
+
+    // Theming for more modern visuals
+    ::SetWindowTheme(hComboLang_, L"Explorer", nullptr);
 
     // Set initial values
     SendMessageW(hComboLang_, CB_ADDSTRING, 0, (LPARAM)L"中文 (Chinese)");
@@ -282,7 +310,6 @@ void SettingsDialog::BuildUi()
     SendMessageW(hHkHideAll_, HKM_SETHOTKEY,
         MakeHotkeyWord(cur_.hkHideAll), 0);
 
-    // --- NEW ---
     SendMessageW(hChkUseCollection_, BM_SETCHECK,
         cur_.useCollectionMode ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(hHkShowCollection_, HKM_SETHOTKEY,
@@ -303,7 +330,6 @@ void SettingsDialog::ApplyLocalization()
     SetWindowTextW(hBtnSave_, S("settings_btn_save"));
     SetWindowTextW(hBtnCancel_, S("settings_btn_cancel"));
 
-    // --- NEW ---
     SetWindowTextW(hChkUseCollection_, S("settings_use_collection_mode"));
     SetWindowTextW(GetDlgItem(hWnd_, IDC_LABEL_HK_SHOW_COLLECTION),
         S("settings_hotkey_show_collection"));
@@ -353,6 +379,26 @@ LRESULT SettingsDialog::HandleMessage(HWND,
     LPARAM lParam)
 {
     switch (msg) {
+        // --- NEW: Handle background erase for a modern flat color ---
+    case WM_ERASEBKGND:
+    {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hWnd_, &rc);
+        // Use a modern light gray/off-white color
+        HBRUSH hBrush = CreateSolidBrush(RGB(249, 249, 249));
+        FillRect(hdc, &rc, hBrush);
+        DeleteObject(hBrush);
+        return 1; // We handled it
+    }
+    // --- NEW: Make static control backgrounds transparent ---
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC hdcStatic = (HDC)wParam;
+        SetBkMode(hdcStatic, TRANSPARENT);
+        SetTextColor(hdcStatic, RGB(20, 20, 20)); // Darker text for better contrast
+        return (LRESULT)GetStockObject(NULL_BRUSH);
+    }
     case WM_COMMAND: {
         switch (LOWORD(wParam)) {
         case IDOK:
@@ -387,7 +433,6 @@ void SettingsDialog::OnSave()
     s.hkHideAll = FromHotkeyWord(
         (WORD)SendMessageW(hHkHideAll_, HKM_GETHOTKEY, 0, 0));
 
-    // --- NEW ---
     s.useCollectionMode =
         (SendMessageW(hChkUseCollection_, BM_GETCHECK, 0, 0) == BST_CHECKED);
     s.hkShowCollection = FromHotkeyWord(

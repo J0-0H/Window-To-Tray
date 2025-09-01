@@ -10,31 +10,31 @@ class VirtualDesktopManager;
 
 class WindowManager {
 public:
+    // 初始化/清理
+    static bool Initialize();
+    static void Cleanup();
+
     // Set the virtual desktop manager instance
     static void SetVirtualDesktopManager(VirtualDesktopManager* vdm);
 
     // Set whether to use virtual desktop enhancement for UWP apps
     static void SetUseVirtualDesktop(bool enable);
-    static bool GetUseVirtualDesktop();
+    [[nodiscard]] static bool GetUseVirtualDesktop();
 
     // Hides a window from the taskbar and Alt-Tab
-    // UWP: Hides via traditional method, then moves to a hidden virtual desktop.
-    // Win32: Uses traditional method only.
-    static bool HideWindowFromTaskbar(HWND hwnd);
+    [[nodiscard]] static bool HideWindowFromTaskbar(HWND hwnd);
 
     // Restores a window to the taskbar and Alt-Tab
-    // UWP: Moves back from the hidden virtual desktop, then restores traditionally.
-    // Win32: Uses traditional method only.
-    static bool ShowWindowInTaskbar(HWND hwnd, int originalDesktop = 0);
+    [[nodiscard]] static bool ShowWindowInTaskbar(HWND hwnd, int originalDesktop = 0);
 
     // Checks if a window is a valid target for minimizing to tray
-    static bool IsValidTargetWindow(HWND hwnd);
+    [[nodiscard]] static bool IsValidTargetWindow(HWND hwnd);
 
     // Unified entry point for "Minimize to Tray"
-    static bool MinimizeToTray(HWND hwnd);
+    [[nodiscard]] static bool MinimizeToTray(HWND hwnd);
 
     // Checks if a window belongs to a UWP application
-    static bool IsUWPApplication(HWND hwnd);
+    [[nodiscard]] static bool IsUWPApplication(HWND hwnd);
 
     // Tries to automatically remove the hidden desktop if it's no longer in use
     static void TryRemoveHiddenDesktopIfUnused();
@@ -45,19 +45,19 @@ private:
     static bool useVirtualDesktop;
 
     // Traditional hide/show methods (callable by both Win32 and UWP)
-    static bool HideWindowTraditional(HWND hwnd);
-    static bool ShowWindowTraditional(HWND hwnd);
+    [[nodiscard]] static bool HideWindowTraditional(HWND hwnd);
+    [[nodiscard]] static bool ShowWindowTraditional(HWND hwnd);
 
     // Virtual desktop methods (enhancement for UWP apps)
-    static bool HideWindowVirtual(HWND hwnd);
-    static bool ShowWindowVirtual(HWND hwnd, int originalDesktop);
+    [[nodiscard]] static bool HideWindowVirtual(HWND hwnd);
+    [[nodiscard]] static bool ShowWindowVirtual(HWND hwnd, int originalDesktop);
 
     // Helper functions for UWP detection
-    static bool IsApplicationFrameHostWindow(HWND hwnd);
-    static bool HasValidAUMID(HWND hwnd);
+    [[nodiscard]] static bool IsApplicationFrameHostWindow(HWND hwnd);
+    [[nodiscard]] static bool HasValidAUMID(HWND hwnd);
 
     // Helper to ensure the ITaskbarList3 instance is ready
-    static bool EnsureTaskbar();
+    [[nodiscard]] static bool EnsureTaskbar();
 };
 
 #endif // WINDOWMANAGER_H

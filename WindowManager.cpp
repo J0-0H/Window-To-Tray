@@ -16,6 +16,32 @@ VirtualDesktopManager* WindowManager::virtualDesktopManager = nullptr;
 ITaskbarList3* WindowManager::taskbarList = nullptr;
 bool WindowManager::useVirtualDesktop = true; // Enabled by default
 
+bool WindowManager::Initialize()
+{
+    // The main application thread has already been initialized with COINIT_APARTMENTTHREADED.
+    // We can create the TaskbarList instance here.
+    HRESULT hr = ::CoCreateInstance(CLSID_TaskbarList, nullptr,
+        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbarList));
+
+    if (SUCCEEDED(hr) && taskbarList)
+    {
+        taskbarList->HrInit();
+        return true;
+    }
+
+    taskbarList = nullptr;
+    return false;
+}
+
+void WindowManager::Cleanup()
+{
+    if (taskbarList)
+    {
+        taskbarList->Release();
+        taskbarList = nullptr;
+    }
+}
+
 void WindowManager::SetVirtualDesktopManager(VirtualDesktopManager* vdm)
 {
     virtualDesktopManager = vdm;
@@ -33,19 +59,7 @@ bool WindowManager::GetUseVirtualDesktop()
 
 bool WindowManager::EnsureTaskbar()
 {
-    if (taskbarList) return true;
-
-    HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    // It's okay if it's already initialized
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return false;
-
-    hr = ::CoCreateInstance(CLSID_TaskbarList, nullptr,
-        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&taskbarList));
-    if (SUCCEEDED(hr) && taskbarList)
-        taskbarList->HrInit();
-    else
-        taskbarList = nullptr;
-
+    // The instance is now created during Initialize, so we just check for its existence.
     return taskbarList != nullptr;
 }
 
@@ -158,7 +172,7 @@ bool WindowManager::HideWindowTraditional(HWND hwnd)
     if (!::IsWindow(hwnd)) return false;
 
     // 1) Remove the taskbar button
-    if (EnsureTaskbar() && taskbarList)
+    if (EnsureTaskbar())
         taskbarList->DeleteTab(hwnd);
 
     // 2) Modify extended styles to hide from Alt-Tab
@@ -189,7 +203,7 @@ bool WindowManager::ShowWindowTraditional(HWND hwnd)
         SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
     // 2) Restore the taskbar button
-    if (EnsureTaskbar() && taskbarList)
+    if (EnsureTaskbar())
         taskbarList->AddTab(hwnd);
 
     // 3) Show the window
@@ -261,7 +275,8 @@ bool WindowManager::ShowWindowInTaskbar(HWND hwnd, int originalDesktop)
     {
         (void)ShowWindowVirtual(hwnd, originalDesktop);
 
-        // 仅取消追踪，不在此处尝试删除隐藏桌面（避免提前把所有 UWP 窗口一起弹出）
+        // Just untrack, don't try to remove the hidden desktop here
+        // (to avoid popping up all UWP windows at once).
         if (virtualDesktopManager)
         {
             virtualDesktopManager->MarkUwpWindowRestored(hwnd);

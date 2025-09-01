@@ -56,7 +56,6 @@ int GlobalHook::GetSystemMetricForDpi(int id, UINT dpi) {
     return ::MulDiv(::GetSystemMetrics(id), dpi, 96);
 }
 
-// Calls WM_NCHITTEST in the target window's DPI context to reduce mismatches.
 LRESULT GlobalHook::SafeNcHitTest(HWND hwnd, POINT ptScreen) {
     HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
     auto pGetWindowDpiAwarenessContext =
@@ -71,8 +70,6 @@ LRESULT GlobalHook::SafeNcHitTest(HWND hwnd, POINT ptScreen) {
     }
 
     DWORD_PTR res = 0;
-    // Note: lParam for WM_NCHITTEST is a POINTS struct (16-bit), so this method is
-    // inherently unreliable if coordinates exceed its limits.
     LPARAM lp = MAKELPARAM((short)ptScreen.x, (short)ptScreen.y);
     BOOL ok = ::SendMessageTimeoutW(hwnd, WM_NCHITTEST, 0, lp,
         SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &res);
@@ -92,7 +89,6 @@ bool GlobalHook::EnsureUIA() {
 
     g_uiaTriedInit = true;
 
-    // Initialize UIA in MTA on the hook thread to avoid STA leaks and re-entrancy issues.
     HRESULT hrCo = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE) {
         return false;
@@ -100,26 +96,18 @@ bool GlobalHook::EnsureUIA() {
 
     HRESULT hr = ::CoCreateInstance(CLSID_CUIAutomation, nullptr,
         CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_uia));
-    if (FAILED(hr) || !g_uia) {
-        return false;
-    }
-    return true;
+    return SUCCEEDED(hr) && g_uia;
 }
 
 
 // --- Top-Level Window Selection ---
 
 HWND GlobalHook::GetTopLevelFromPoint(POINT ptScreen) {
-    // Prioritize the window that has captured the mouse
     if (HWND cap = ::GetCapture()) {
-        HWND top = ::GetAncestor(cap, GA_ROOT);
-        if (top) return top;
+        if (HWND top = ::GetAncestor(cap, GA_ROOT)) return top;
     }
-
     HWND hwnd = ::WindowFromPoint(ptScreen);
     if (!hwnd) return nullptr;
-
-    // Ascend to the root window to handle transparent or intermediate windows
     HWND top = ::GetAncestor(hwnd, GA_ROOT);
     return top ? top : hwnd;
 }
@@ -136,12 +124,12 @@ bool GlobalHook::HitByTitleBarInfoEx(HWND hwnd, POINT ptScreen) {
         SMTO_ABORTIFHUNG | SMTO_BLOCK, 60, nullptr)) {
         return false;
     }
-    // Index 2 is the minimize button
     const RECT& rcMin = tbix.rgrect[2];
     return IsRectValid(rcMin) && PtInRectEx(rcMin, ptScreen);
 }
 
 // 2) DWMWA_CAPTION_BUTTON_BOUNDS: For DWM-rendered custom frames.
+//    --- REFINED OPTIMIZATION ---
 bool GlobalHook::HitByDwmCaptionButtonBounds(HWND hwnd, POINT ptScreen) {
     RECT rcButtons{};
     HRESULT hr = ::DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS,
@@ -149,41 +137,49 @@ bool GlobalHook::HitByDwmCaptionButtonBounds(HWND hwnd, POINT ptScreen) {
     if (FAILED(hr) || !IsRectValid(rcButtons)) return false;
 
     LONG style = static_cast<LONG>(::GetWindowLongW(hwnd, GWL_STYLE));
-    LONG exstyle = static_cast<LONG>(::GetWindowLongW(hwnd, GWL_EXSTYLE));
-    const bool hasMin = (style & WS_MINIMIZEBOX) != 0;
-    const bool hasMax = (style & WS_MAXIMIZEBOX) != 0;
+    if ((style & WS_MINIMIZEBOX) == 0) return false;
 
-    if (!hasMin) return false;
+    int numButtons = 1; // Close button
+    if (style & WS_MAXIMIZEBOX) numButtons++;
+    // Minimize button already confirmed
 
-    const bool rtl = (exstyle & WS_EX_LAYOUTRTL) != 0;
+    const LONG totalWidth = rcButtons.right - rcButtons.left;
+    if (numButtons == 0 || totalWidth <= 0) return false;
+    const int avgSlotWidth = totalWidth / numButtons;
+
+    // --- NEW LOGIC: Refine the hitbox size ---
+    // Use the average width to find the button's "slot", then use system metrics
+    // to get a tighter hitbox, which is then centered within the slot.
     const UINT dpi = GetDpiForHwnd(hwnd);
-    const int btnW = GetSystemMetricForDpi(SM_CXSIZE, dpi);
-    const int btnH = GetSystemMetricForDpi(SM_CYSIZE, dpi);
+    const int standardButtonWidth = GetSystemMetricForDpi(SM_CXSIZE, dpi);
 
-    // Buttons are ordered from right-to-left in LTR layout: Close, Max/Restore, Min
-    RECT rcMin = rcButtons;
-    if (!rtl) {
-        int offset = 0;
-        offset += btnW; // Close button
-        if (hasMax) offset += btnW; // Max/Restore button
+    // The actual button width is likely the smaller of the two values.
+    const int buttonWidth = min(avgSlotWidth, standardButtonWidth);
 
-        rcMin.right = rcButtons.right - offset;
-        rcMin.left = rcMin.right - btnW;
-        rcMin.top = rcButtons.top;
-        rcMin.bottom = rcMin.top + btnH;
+    // Calculate the padding needed to center the tighter hitbox within the slot.
+    const int sidePadding = (avgSlotWidth > buttonWidth) ? (avgSlotWidth - buttonWidth) / 2 : 0;
+
+    RECT rcMinSlot{};
+    LONG exstyle = static_cast<LONG>(::GetWindowLongW(hwnd, GWL_EXSTYLE));
+    const bool rtl = (exstyle & WS_EX_LAYOUTRTL) != 0;
+
+    if (!rtl) { // LTR: Minimize button is the leftmost in the DWM group
+        rcMinSlot.left = rcButtons.left;
+        rcMinSlot.right = rcButtons.left + avgSlotWidth;
     }
-    else { // RTL layout is left-to-right: Close, Max/Restore, Min
-        int offset = 0;
-        offset += btnW; // Close button
-        if (hasMax) offset += btnW; // Max/Restore button
-
-        rcMin.left = rcButtons.left + offset;
-        rcMin.right = rcMin.left + btnW;
-        rcMin.top = rcButtons.top;
-        rcMin.bottom = rcMin.top + btnH;
+    else { // RTL: Minimize button is the rightmost in the DWM group
+        rcMinSlot.right = rcButtons.right;
+        rcMinSlot.left = rcButtons.right - avgSlotWidth;
     }
+    rcMinSlot.top = rcButtons.top;
+    rcMinSlot.bottom = rcButtons.bottom;
 
-    return PtInRectEx(rcMin, ptScreen);
+    // Apply padding to shrink the slot to the final, tighter hitbox
+    RECT rcMinHitbox = rcMinSlot;
+    rcMinHitbox.left += sidePadding;
+    rcMinHitbox.right -= sidePadding;
+
+    return PtInRectEx(rcMinHitbox, ptScreen);
 }
 
 // 3) UI Automation: More reliable for custom-drawn title bars (e.g., Office, Chromium).
@@ -209,13 +205,22 @@ bool GlobalHook::HitByUIAutomation(HWND, POINT ptScreen) {
             return wcsstr(s, w) != nullptr;
             };
 
-        // Multilingual matching for "Minimize"
-        const bool nameMin =
-            containsWord(name, L"Minimize") || containsWord(name, L"最小化");
-        const bool idMin =
-            containsWord(aid, L"Min") || containsWord(aid, L"Minimize");
+        const wchar_t* minimizeKeywords[] = {
+            L"Minimize", L"最小化", L"Minimieren", L"Minimiser", L"Minimizar",
+            L"Riduci a icona", L"Свернуть", L"最小化", L"최소화", L"Minimalizuj"
+        };
+        bool nameMatch = false;
+        if (name) {
+            for (const auto& keyword : minimizeKeywords) {
+                if (containsWord(name, keyword)) {
+                    nameMatch = true;
+                    break;
+                }
+            }
+        }
+        const bool idMatch = containsWord(aid, L"Min");
 
-        if ((nameMin || idMin) && IsRectValid(rc) && PtInRect(&rc, ptScreen)) {
+        if ((nameMatch || idMatch) && IsRectValid(rc) && PtInRect(&rc, ptScreen)) {
             hit = true;
         }
 
@@ -237,7 +242,6 @@ bool GlobalHook::HitByNcHitTest(HWND hwnd, POINT ptScreen) {
 bool GlobalHook::IsMinimizeHit(HWND topLevel, POINT ptScreen) {
     if (!topLevel || !::IsWindowVisible(topLevel)) return false;
 
-    // Ordered from most to least efficient/reliable
     if (HitByTitleBarInfoEx(topLevel, ptScreen)) return true;
     if (HitByDwmCaptionButtonBounds(topLevel, ptScreen)) return true;
     if (HitByUIAutomation(topLevel, ptScreen)) return true;
@@ -264,7 +268,6 @@ GlobalHook::~GlobalHook() {
 
 bool GlobalHook::Install() {
     if (mouseHook_) return true;
-
     mouseHook_ = ::SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc,
         ::GetModuleHandleW(nullptr), 0);
     return mouseHook_ != nullptr;
@@ -289,7 +292,6 @@ LRESULT CALLBACK GlobalHook::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
         const auto* ms = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
         const POINT pt = ms->pt;
 
-        // We only care about the right mouse button
         switch (wParam) {
         case WM_RBUTTONDOWN: {
             HWND top = GetTopLevelFromPoint(pt);
@@ -297,7 +299,7 @@ LRESULT CALLBACK GlobalHook::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
                 s_lastHitHwnd = top;
                 s_lastDownPt = pt;
                 s_lastDownTick = ::GetTickCount();
-                return 1; // Suppress the message
+                return 1; // Suppress message
             }
             else {
                 s_lastHitHwnd = nullptr;
@@ -318,7 +320,7 @@ LRESULT CALLBACK GlobalHook::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM 
                         s_instance->mouseCallback_(pt, top);
                     }
                     s_lastHitHwnd = nullptr;
-                    return 1; // Suppress the message
+                    return 1; // Suppress message
                 }
             }
             s_lastHitHwnd = nullptr;
